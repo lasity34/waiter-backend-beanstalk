@@ -35,17 +35,13 @@ db = SQLAlchemy(application)
 login_manager = LoginManager(application)
 
 # CORS configuration
-allowed_origins = ['https://d1ozcmsi9wy8ty.cloudfront.net', 'http://localhost:3000']
-CORS(application, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
+allowed_origins = os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
+CORS(application, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 @application.after_request
 def after_request(response):
-    origin = request.headers.get('Origin')
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 # Models
