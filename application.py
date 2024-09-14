@@ -35,8 +35,8 @@ db = SQLAlchemy(application)
 login_manager = LoginManager(application)
 
 # CORS configuration
-allowed_origins = os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
-CORS(application, resources={r"/*": {"origins": allowed_origins}})
+allowed_origins = ['https://d1ozcmsi9wy8ty.cloudfront.net', 'http://localhost:3000']
+CORS(application, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 @application.after_request
 def after_request(response):
@@ -89,7 +89,7 @@ def db_test():
     except Exception as e:
         return jsonify({"message": f"Database connection failed: {str(e)}"}), 500
 
-@application.route('/login', methods=['POST'])
+@application.route('/api/login', methods=['POST'])
 def login():
     data = request.json
     user = User.query.filter_by(email=data['email']).first()
@@ -103,13 +103,13 @@ def login():
         })
     return jsonify({'message': 'Invalid email or password'}), 401
 
-@application.route('/logout')
+@application.route('/api/logout')
 @login_required
 def logout():
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
 
-@application.route('/users', methods=['GET', 'POST'])
+@application.route('/api/users', methods=['GET', 'POST'])
 @login_required
 def handle_users():
     if current_user.role != 'manager':
@@ -128,7 +128,7 @@ def handle_users():
         users = User.query.all()
         return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
 
-@application.route('/users/<int:user_id>', methods=['PUT', 'DELETE'])
+@application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
 @login_required
 def manage_user(user_id):
     if current_user.role != 'manager':
@@ -151,7 +151,7 @@ def manage_user(user_id):
         db.session.commit()
         return jsonify({'message': 'User deleted successfully'})
 
-@application.route('/shifts', methods=['GET', 'POST'])
+@application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
 def handle_shifts():
     if request.method == 'POST':
@@ -205,7 +205,7 @@ def handle_shifts():
         except Exception as e:
             return jsonify({'message': 'Failed to fetch shifts', 'error': str(e)}), 500
 
-@application.route('/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
+@application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
 @login_required
 def manage_shift(shift_id):
     if current_user.role != 'manager':
