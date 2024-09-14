@@ -99,6 +99,15 @@ def login():
         })
     return jsonify({'message': 'Invalid email or password'}), 401
 
+@application.route('/api/login', methods=['OPTIONS'])
+def handle_options():
+    response = application.make_default_options_response()
+    return response
+
+@application.route('/api/test', methods=['GET'])
+def test_route():
+    return jsonify({"message": "API is working"}), 200
+
 @application.route('/api/logout')
 @login_required
 def logout():
