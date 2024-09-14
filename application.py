@@ -7,6 +7,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from sqlalchemy import text
+from sqlalchemy.orm import joinedload
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -107,6 +108,140 @@ def login():
 def logout():
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
+
+@application.route('/users', methods=['GET', 'POST'])
+@login_required
+def handle_users():
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
+    
+    if request.method == 'POST':
+        data = request.json
+        if User.query.filter_by(email=data['email']).first():
+            return jsonify({'message': 'Email already registered'}), 400
+        new_user = User(email=data['email'], role=data['role'], name=data['name'])
+        new_user.set_password(data['password'])
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({'message': 'User created successfully', 'id': new_user.id}), 201
+    else:
+        users = User.query.all()
+        return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
+
+@application.route('/users/<int:user_id>', methods=['PUT', 'DELETE'])
+@login_required
+def manage_user(user_id):
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
+    
+    user = User.query.get_or_404(user_id)
+    
+    if request.method == 'PUT':
+        data = request.json
+        user.name = data.get('name', user.name)
+        user.email = data.get('email', user.email)
+        user.role = data.get('role', user.role)
+        if 'password' in data:
+            user.set_password(data['password'])
+        db.session.commit()
+        return jsonify({'message': 'User updated successfully'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'User deleted successfully'})
+
+@application.route('/shifts', methods=['GET', 'POST'])
+@login_required
+def handle_shifts():
+    if request.method == 'POST':
+        data = request.json
+        user_id = data.get('user_id', current_user.id)
+        
+        if current_user.role != 'manager' and user_id != current_user.id:
+            return jsonify({'message': 'Unauthorized'}), 403
+        
+        date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+        
+        existing_shift = Shift.query.filter_by(user_id=user_id, date=date).first()
+        if existing_shift and current_user.role != 'manager':
+            return jsonify({'message': 'You already have a shift on this day'}), 400
+        
+        new_shift = Shift(
+            user_id=user_id,
+            date=date,
+            start_time=datetime.strptime(data['start_time'], '%H:%M').time(),
+            end_time=datetime.strptime(data['end_time'], '%H:%M').time(),
+            shift_type=data['shift_type'],
+            status='approved' if current_user.role == 'manager' else 'requested'
+        )
+        db.session.add(new_shift)
+        
+        try:
+            db.session.commit()
+            return jsonify({'message': 'Shift created successfully', 'id': new_shift.id}), 201
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
+    
+    else:  # GET request
+        try:
+            if current_user.role == 'manager':
+                shifts = Shift.query.options(joinedload(Shift.user)).all()
+            else:
+                shifts = Shift.query.filter_by(user_id=current_user.id).all()
+            
+            return jsonify([{
+                'id': shift.id,
+                'user_id': shift.user_id,
+                'user_name': shift.user.name,
+                'date': shift.date.isoformat(),
+                'start_time': shift.start_time.isoformat(),
+                'end_time': shift.end_time.isoformat(),
+                'status': shift.status,
+                'shift_type': shift.shift_type,
+                'is_current_user': shift.user_id == current_user.id
+            } for shift in shifts]), 200
+        except Exception as e:
+            return jsonify({'message': 'Failed to fetch shifts', 'error': str(e)}), 500
+
+@application.route('/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
+@login_required
+def manage_shift(shift_id):
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
+   
+    shift = Shift.query.get_or_404(shift_id)
+    
+    if request.method == 'PUT':
+        data = request.json
+        
+        if 'shift_type' in data:
+            shift.shift_type = data['shift_type']
+            if data['shift_type'] == 'morning':
+                shift.start_time = datetime.strptime('09:00', '%H:%M').time()
+                shift.end_time = datetime.strptime('17:00', '%H:%M').time()
+            elif data['shift_type'] == 'evening':
+                shift.start_time = datetime.strptime('17:00', '%H:%M').time()
+                shift.end_time = datetime.strptime('01:00', '%H:%M').time()
+            elif data['shift_type'] == 'double':
+                shift.start_time = datetime.strptime('09:00', '%H:%M').time()
+                shift.end_time = datetime.strptime('01:00', '%H:%M').time()
+        
+        for field in ['status', 'date', 'user_id']:
+            if field in data:
+                if field == 'date':
+                    setattr(shift, field, datetime.strptime(data[field], '%Y-%m-%d').date())
+                else:
+                    setattr(shift, field, data[field])
+
+        db.session.commit()
+        return jsonify({'message': 'Shift updated successfully'})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(shift)
+        db.session.commit()
+        return jsonify({'message': 'Shift deleted successfully'})
 
 def init_db():
     with application.app_context():
