@@ -79,7 +79,7 @@ def load_user(user_id):
 # Routes
 @application.route('/')
 def hello():
-    return jsonify({"message": "Welcome to the Waiter Scheduling App"}), 200
+    return jsonify({"message": "Carin is a bitch"}), 200
 
 @application.route('/db-test')
 def db_test():
