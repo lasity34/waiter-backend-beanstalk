@@ -8,6 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import BadRequest
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -94,25 +95,48 @@ def test_post():
 
 @application.route('/api/login', methods=['POST'])
 def login():
-    data = request.json
-    user = User.query.filter_by(email=data['email']).first()
-    if user and user.check_password(data['password']):
+    logger.info("Login attempt received")
+    logger.info(f"Request headers: {request.headers}")
+    logger.info(f"Request method: {request.method}")
+    
+    try:
+        # Log the raw data received
+        logger.info(f"Raw data received: {request.data}")
+        
+        # Try to parse JSON data
+        data = request.get_json()
+        logger.info(f"Parsed JSON data: {data}")
+        
+        if not data or 'email' not in data or 'password' not in data:
+            raise BadRequest("Invalid login data")
+
+        user = User.query.filter_by(email=data['email']).first()
+        logger.info(f"User query result: {user}")
+        
+        if not user:
+            logger.warning(f"No user found with email: {data['email']}")
+            return jsonify({'message': 'Invalid email or password'}), 401
+        
+        if not user.check_password(data['password']):
+            logger.warning(f"Incorrect password for user: {user.email}")
+            return jsonify({'message': 'Invalid email or password'}), 401
+
         login_user(user)
-        session['user_id'] = user.id  # Set session
-        session.permanent = True  # Make session persistent
+        logger.info(f"Login successful for user: {user.email}")
         return jsonify({
             'message': 'Logged in successfully',
             'role': user.role,
             'name': user.name,
             'id': user.id
         })
-    return jsonify({'message': 'Invalid email or password'}), 401
 
+    except BadRequest as e:
+        logger.warning(f"Bad request: {str(e)}")
+        return jsonify({'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Exception in login route: {str(e)}", exc_info=True)
+        return jsonify({'message': 'An error occurred during login'}), 500
 
-@application.route('/api/login', methods=['OPTIONS'])
-def handle_options():
-    response = application.make_default_options_response()
-    return response
 
 @application.route('/api/test', methods=['GET'])
 def test_route():
