@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from flask import Flask, request, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
@@ -91,6 +92,11 @@ def db_test():
     except Exception as e:
         logger.error(f"Database connection error: {str(e)}")
         return jsonify({'message': 'Database connection failed'}), 500
+    
+
+@application.route('/api/python-version')
+def python_version():
+    return jsonify({'python_version': sys.version})
     
     
 @application.route('/api/test-post', methods=['POST'])
