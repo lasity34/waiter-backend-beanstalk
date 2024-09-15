@@ -76,13 +76,14 @@ def load_user(user_id):
 def hello():
     return jsonify({"message": "Carin is a bitch"}), 200
 
-@application.route('api/db-test')
+@application.route('/api/db-test')
 def db_test():
     try:
-        result = db.session.execute(text('SELECT 1'))
-        return jsonify({"message": "Database connection successful", "result": result.scalar()}), 200
+        user_count = User.query.count()
+        return jsonify({'message': f'Database connection successful. User count: {user_count}'}), 200
     except Exception as e:
-        return jsonify({"message": f"Database connection failed: {str(e)}"}), 500
+        logger.error(f"Database connection error: {str(e)}")
+        return jsonify({'message': 'Database connection failed'}), 500
 
 @application.route('/api/login', methods=['POST'])
 def login():
