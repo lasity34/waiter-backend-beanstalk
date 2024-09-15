@@ -60,7 +60,7 @@ class User(UserMixin, db.Model):
     name = db.Column(db.String(100), nullable=False)
 
     def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+        self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -140,6 +140,15 @@ def login():
 @application.route('/api/test', methods=['GET'])
 def test_route():
     return jsonify({"message": "API is working"}), 200
+
+@application.route('/api/update_password_hashes', methods=['POST'])
+def update_password_hashes():
+    users = User.query.all()
+    for user in users:
+        # Set a temporary password for all users
+        user.set_password('temp_password')
+    db.session.commit()
+    return jsonify({'message': 'All user passwords updated to temporary password'})
 
 @application.route('/api/logout')
 @login_required
