@@ -84,6 +84,13 @@ def db_test():
     except Exception as e:
         logger.error(f"Database connection error: {str(e)}")
         return jsonify({'message': 'Database connection failed'}), 500
+    
+    
+@application.route('/api/test-post', methods=['POST'])
+def test_post():
+    data = request.get_json()
+    return jsonify({'message': 'POST request received', 'data': data}), 200
+
 
 @application.route('/api/login', methods=['POST'])
 def login():
