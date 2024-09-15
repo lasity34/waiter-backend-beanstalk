@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -36,13 +36,11 @@ login_manager = LoginManager(application)
 
 # CORS configuration
 allowed_origins = os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
-CORS(application, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
-
+CORS(application, resources={r"/api/*": {"origins": allowed_origins, "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]}}, supports_credentials=True)
 
 @application.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 # Models
@@ -78,7 +76,7 @@ def load_user(user_id):
 def hello():
     return jsonify({"message": "Carin is a bitch"}), 200
 
-@application.route('/db-test')
+@application.route('api/db-test')
 def db_test():
     try:
         result = db.session.execute(text('SELECT 1'))
@@ -92,6 +90,8 @@ def login():
     user = User.query.filter_by(email=data['email']).first()
     if user and user.check_password(data['password']):
         login_user(user)
+        session['user_id'] = user.id  # Set session
+        session.permanent = True  # Make session persistent
         return jsonify({
             'message': 'Logged in successfully',
             'role': user.role,
