@@ -97,31 +97,22 @@ def test_post():
 def login():
     logger.info("Login attempt received")
     logger.info(f"Request headers: {request.headers}")
-    logger.info(f"Request method: {request.method}")
     
     try:
-        # Log the raw data received
-        logger.info(f"Raw data received: {request.data}")
-        
-        # Try to parse JSON data
         data = request.get_json()
         logger.info(f"Parsed JSON data: {data}")
         
         if not data or 'email' not in data or 'password' not in data:
-            raise BadRequest("Invalid login data")
+            logger.warning("Invalid login data received")
+            return jsonify({'message': 'Invalid login data'}), 400
 
         user = User.query.filter_by(email=data['email']).first()
-        logger.info(f"User query result: {user}")
         
-        if not user:
-            logger.warning(f"No user found with email: {data['email']}")
-            return jsonify({'message': 'Invalid email or password'}), 401
-        
-        if not user.check_password(data['password']):
-            logger.warning(f"Incorrect password for user: {user.email}")
+        if not user or not user.check_password(data['password']):
+            logger.warning(f"Failed login attempt for email: {data['email']}")
             return jsonify({'message': 'Invalid email or password'}), 401
 
-        login_user(user)
+        login_user(user, remember=data.get('remember', False))
         logger.info(f"Login successful for user: {user.email}")
         return jsonify({
             'message': 'Logged in successfully',
@@ -130,13 +121,9 @@ def login():
             'id': user.id
         })
 
-    except BadRequest as e:
-        logger.warning(f"Bad request: {str(e)}")
-        return jsonify({'message': str(e)}), 400
     except Exception as e:
         logger.error(f"Exception in login route: {str(e)}", exc_info=True)
         return jsonify({'message': 'An error occurred during login'}), 500
-
 
 @application.route('/api/test', methods=['GET'])
 def test_route():
