@@ -36,7 +36,8 @@ login_manager = LoginManager(application)
 
 # CORS configuration
 allowed_origins = os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
-CORS(application, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
+CORS(application, resources={r"/api*": {"origins": allowed_origins}}, supports_credentials=True)
+
 
 @application.after_request
 def after_request(response):
