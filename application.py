@@ -88,7 +88,11 @@ def load_user(user_id):
 # Routes
 @application.route('/')
 def hello():
-    return jsonify({"message": "Carin is a bitch"}), 200
+    return jsonify({"message": "Carin is moois"}), 200
+
+@application.route('/api/health')
+def health_check():
+       return jsonify({"status": "healthy"}), 200
 
 @application.route('/api/db-test')
 def db_test():
@@ -314,6 +318,8 @@ def init_db():
         except Exception as e:
             logger.error(f"Error initializing database: {str(e)}")
             raise
+
+
 
 # Initialize the database
 init_db()
