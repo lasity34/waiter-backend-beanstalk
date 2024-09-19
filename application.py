@@ -37,25 +37,26 @@ db = SQLAlchemy(application)
 login_manager = LoginManager(application)
 
 allowed_origins = [
-       origin.strip() 
-       for origin in os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
-   ]
+    origin.strip() 
+    for origin in os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
+]
 logger.info(f"Allowed origins: {allowed_origins}")
 
 CORS(application, resources={r"/api/*": {
-       "origins": allowed_origins, 
-       "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], 
-       "allow_headers": ["Content-Type", "Authorization"]
-   }}, supports_credentials=True)
-
+    "origins": allowed_origins, 
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], 
+    "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Origin"]
+}}, supports_credentials=True)
 
 @application.after_request
 def after_request(response):
-     response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
-     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-     response.headers.add('Access-Control-Allow-Credentials', 'true')
-     return response
+    origin = request.headers.get('Origin')
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 # Models
 class User(UserMixin, db.Model):
