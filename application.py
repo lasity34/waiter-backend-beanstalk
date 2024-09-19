@@ -45,8 +45,10 @@ logger.info(f"Allowed origins: {allowed_origins}")
 CORS(application, resources={r"/api/*": {
     "origins": allowed_origins, 
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], 
-    "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Origin"]
-}}, supports_credentials=True)
+    "allow_headers": ["Content-Type", "Authorization"],
+    "supports_credentials": True
+}})
+
 
 @application.after_request
 def after_request(response):
@@ -95,25 +97,10 @@ def hello():
 def health_check():
        return jsonify({"status": "healthy"}), 200
 
-@application.route('/api/db-test')
-def db_test():
-    try:
-        user_count = User.query.count()
-        return jsonify({'message': f'Database connection successful. User count: {user_count}'}), 200
-    except Exception as e:
-        logger.error(f"Database connection error: {str(e)}")
-        return jsonify({'message': 'Database connection failed'}), 500
-    
 
 @application.route('/api/python-version')
 def python_version():
     return jsonify({'python_version': sys.version})
-    
-    
-@application.route('/api/test-post', methods=['POST'])
-def test_post():
-    data = request.get_json()
-    return jsonify({'message': 'POST request received', 'data': data}), 200
 
 
 @application.route('/api/login', methods=['POST'])
@@ -148,9 +135,11 @@ def login():
         logger.error(f"Exception in login route: {str(e)}", exc_info=True)
         return jsonify({'message': 'An error occurred during login'}), 500
 
-@application.route('/api/test', methods=['GET'])
-def test_route():
-    return jsonify({"message": "API is working"}), 200
+
+@application.route('/api/login', methods=['OPTIONS'])
+def handle_login_preflight():
+    response = application.make_default_options_response()
+    return after_request(response)
 
 @application.route('/api/update_password_hashes', methods=['POST'])
 def update_password_hashes():
