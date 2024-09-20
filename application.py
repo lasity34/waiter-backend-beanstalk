@@ -1,19 +1,23 @@
 import os
 import sys
 import logging
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from sqlalchemy import text
 from sqlalchemy.orm import joinedload
-from werkzeug.exceptions import BadRequest
+from dotenv import load_dotenv
+
+
+# Load the .env file from the current directory
+load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
+
 
 # Initialize Flask app
 application = Flask(__name__)
@@ -204,16 +208,16 @@ def handle_shifts():
     if request.method == 'POST':
         data = request.json
         user_id = data.get('user_id', current_user.id)
-        
+       
         if current_user.role != 'manager' and user_id != current_user.id:
             return jsonify({'message': 'Unauthorized'}), 403
-        
+       
         date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-        
+       
         existing_shift = Shift.query.filter_by(user_id=user_id, date=date).first()
         if existing_shift and current_user.role != 'manager':
             return jsonify({'message': 'You already have a shift on this day'}), 400
-        
+       
         new_shift = Shift(
             user_id=user_id,
             date=date,
@@ -223,21 +227,19 @@ def handle_shifts():
             status='approved' if current_user.role == 'manager' else 'requested'
         )
         db.session.add(new_shift)
-        
+       
         try:
             db.session.commit()
             return jsonify({'message': 'Shift created successfully', 'id': new_shift.id}), 201
         except Exception as e:
             db.session.rollback()
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
-    
+   
     else:  # GET request
         try:
-            if current_user.role == 'manager':
-                shifts = Shift.query.options(joinedload(Shift.user)).all()
-            else:
-                shifts = Shift.query.filter_by(user_id=current_user.id).all()
-            
+            # Always fetch all shifts, regardless of user role
+            shifts = Shift.query.options(joinedload(Shift.user)).all()
+           
             return jsonify([{
                 'id': shift.id,
                 'user_id': shift.user_id,
