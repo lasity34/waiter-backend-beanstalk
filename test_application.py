@@ -1,50 +1,61 @@
 # test_application.py
 
 import pytest
-from application import application, db, User, Shift
+from application import create_app, db, User, Shift
 from flask_login import login_user
 from datetime import datetime, time, timedelta
 
-@pytest.fixture
-def client():
-    application.config['TESTING'] = True
-    application.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    application.config['WTF_CSRF_ENABLED'] = False
+class TestConfig:
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    WTF_CSRF_ENABLED = False
+    SECRET_KEY = 'test_secret_key'
 
-    with application.test_client() as client:
-        with application.app_context():
-            db.create_all()
-            yield client
-            db.session.remove()
-            db.drop_all()
-
-@pytest.fixture
-def init_database():
-    # Create test users
-    admin = User(email='admin@test.com', role='manager', name='Admin')
-    admin.set_password('adminpass')
-    waiter = User(email='waiter@test.com', role='waiter', name='Waiter')
-    waiter.set_password('waiterpass')
+@pytest.fixture(scope='module')
+def app():
+    app = create_app(TestConfig)
     
-    # Add users to database
-    db.session.add(admin)
-    db.session.add(waiter)
-    db.session.commit()
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.session.remove()
+        db.drop_all()
 
-    # Create a test shift
-    shift = Shift(
-        user_id=waiter.id,
-        date=datetime.now().date(),
-        start_time=time(9, 0),
-        end_time=time(17, 0),
-        status='requested',
-        shift_type='morning'
-    )
-    db.session.add(shift)
-    db.session.commit()
+@pytest.fixture
+def client(app):
+    return app.test_client()
 
+@pytest.fixture
+def init_database(app):
+    with app.app_context():
+        # Create test users
+        admin = User(email='admin@test.com', role='manager', name='Admin')
+        admin.set_password('adminpass')
+        waiter = User(email='waiter@test.com', role='waiter', name='Waiter')
+        waiter.set_password('waiterpass')
+        
+        # Add users to database
+        db.session.add(admin)
+        db.session.add(waiter)
+        db.session.commit()
 
-    # user login
+        # Create a test shift
+        shift = Shift(
+            user_id=waiter.id,
+            date=datetime.now().date(),
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            status='requested',
+            shift_type='morning'
+        )
+        db.session.add(shift)
+        db.session.commit()
+
+        yield
+
+        # Clean up
+        db.session.remove()
+        db.drop_all()
 
 def login_user(client, email, password):
     return client.post('/api/login', json={
@@ -52,6 +63,11 @@ def login_user(client, email, password):
         'password': password
     })
 
+def test_database_uri(app):
+    assert app.config['SQLALCHEMY_DATABASE_URI'] == 'sqlite:///:memory:', \
+        "Test is not using in-memory SQLite database"
+
+# The rest of your test functions remain the same
 def test_login_success(client, init_database):
     response = login_user(client, 'admin@test.com', 'adminpass')
     assert response.status_code == 200
@@ -61,6 +77,7 @@ def test_login_failure(client, init_database):
     response = login_user(client, 'admin@test.com', 'wrongpass')
     assert response.status_code == 401
     assert b'Invalid email or password' in response.data
+
 
 def test_logout(client, init_database):
     login_user(client, 'admin@test.com', 'adminpass')
@@ -164,19 +181,19 @@ def test_update_user(client, init_database):
     assert response.status_code == 200
     assert b'User updated successfully' in response.data
 
-def test_delete_user(client, init_database):
+def test_delete_user(client, app, init_database):
     login_user(client, 'admin@test.com', 'adminpass')
-    
+   
     # First, get the waiter's id
     response = client.get('/api/users')
     users = response.get_json()
     waiter_id = [user['id'] for user in users if user['role'] == 'waiter'][0]
-    
+   
     # Delete all shifts associated with the user
-    with application.app_context():
+    with app.app_context():
         Shift.query.filter_by(user_id=waiter_id).delete()
         db.session.commit()
-    
+   
     # Now delete the user
     response = client.delete(f'/api/users/{waiter_id}')
     assert response.status_code == 200
@@ -230,5 +247,4 @@ def test_create_duplicate_shift(client, init_database):
     })
     assert response.status_code == 400
     assert b'You already have a shift on this day' in response.data
-
 # Add more tests as needed

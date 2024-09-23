@@ -10,14 +10,12 @@ from datetime import datetime
 from sqlalchemy.orm import joinedload
 from dotenv import load_dotenv
 
-
 # Load the .env file from the current directory
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
-
 
 # Initialize Flask app
 application = Flask(__name__)
@@ -52,7 +50,6 @@ CORS(application, resources={r"/api/*": {
     "allow_headers": ["Content-Type", "Authorization"],
     "supports_credentials": True
 }})
-
 
 @application.after_request
 def after_request(response):
@@ -104,7 +101,8 @@ def hello():
 
 @application.route('/api/health')
 def health_check():
-       return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "healthy"}), 200
+
 
 
 @application.route('/api/login', methods=['POST'])
@@ -347,10 +345,15 @@ def init_db():
             logger.error(f"Error initializing database: {str(e)}")
             raise
 
-
-
 # Initialize the database
 init_db()
+
+
+# Add this function to support testing
+def create_application(config_object=None):
+    if config_object:
+        application.config.from_object(config_object)
+    return application
 
 if __name__ == '__main__':
     application.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
