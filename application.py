@@ -73,10 +73,15 @@ class User(UserMixin, db.Model):
     name = db.Column(db.String(100), nullable=False)
 
     def set_password(self, password):
-        self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+        logger.info(f"Setting new password for user: {self.email}")
+        self.password_hash = generate_password_hash(password)
+        logger.info(f"New password hash generated for user: {self.email}")
 
     def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
+        logger.info(f"Checking password for user: {self.email}")
+        result = check_password_hash(self.password_hash, password)
+        logger.info(f"Password check result for user {self.email}: {'Success' if result else 'Failure'}")
+        return result
 
 class Shift(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -102,30 +107,29 @@ def health_check():
        return jsonify({"status": "healthy"}), 200
 
 
-@application.route('/api/python-version')
-def python_version():
-    return jsonify({'python_version': sys.version})
-
-
 @application.route('/api/login', methods=['POST'])
 def login():
     logger.info("Login attempt received")
     logger.info(f"Request headers: {request.headers}")
-    
+   
     try:
         data = request.get_json()
         logger.info(f"Parsed JSON data: {data}")
-        
+       
         if not data or 'email' not in data or 'password' not in data:
             logger.warning("Invalid login data received")
             return jsonify({'message': 'Invalid login data'}), 400
-
-        user = User.query.filter_by(email=data['email']).first()
         
-        if not user or not user.check_password(data['password']):
-            logger.warning(f"Failed login attempt for email: {data['email']}")
+        user = User.query.filter_by(email=data['email']).first()
+       
+        if not user:
+            logger.warning(f"No user found for email: {data['email']}")
             return jsonify({'message': 'Invalid email or password'}), 401
-
+        
+        if not user.check_password(data['password']):
+            logger.warning(f"Incorrect password for email: {data['email']}")
+            return jsonify({'message': 'Invalid email or password'}), 401
+        
         login_user(user, remember=data.get('remember', False))
         logger.info(f"Login successful for user: {user.email}")
         return jsonify({
@@ -134,10 +138,11 @@ def login():
             'name': user.name,
             'id': user.id
         })
-
     except Exception as e:
         logger.error(f"Exception in login route: {str(e)}", exc_info=True)
         return jsonify({'message': 'An error occurred during login'}), 500
+
+
 
 
 @application.route('/api/login', methods=['OPTIONS'])
@@ -153,6 +158,18 @@ def update_password_hashes():
         user.set_password('temp_password')
     db.session.commit()
     return jsonify({'message': 'All user passwords updated to temporary password'})
+
+
+@application.route('/api/update_user_password', methods=['POST'])
+def update_user_password():
+    data = request.json
+    user = User.query.filter_by(email=data['email']).first()
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    user.set_password(data['new_password'])
+    db.session.commit()
+    return jsonify({'message': 'Password updated successfully'})
+
 
 @application.route('/api/logout')
 @login_required
@@ -198,9 +215,28 @@ def manage_user(user_id):
         return jsonify({'message': 'User updated successfully'})
     
     elif request.method == 'DELETE':
+        # Check if the user has any associated shifts
+        if Shift.query.filter_by(user_id=user_id).first():
+            return jsonify({'message': 'Cannot delete user with associated shifts'}), 400
+        
         db.session.delete(user)
         db.session.commit()
         return jsonify({'message': 'User deleted successfully'})
+    
+# test
+
+@application.route('/api/check_users', methods=['GET'])
+def check_users():
+    users = User.query.all()
+    user_info = [{
+        'email': user.email,
+        'role': user.role,
+        'password_hash': user.password_hash[:20] + '...'  # Only show part of the hash for security
+    } for user in users]
+    return jsonify(user_info)
+
+
+
 
 @application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
