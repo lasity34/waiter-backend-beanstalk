@@ -103,6 +103,30 @@ def hello():
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
+def create_specific_admin():
+    with application.app_context():
+        # Check if the user already exists
+        existing_user = User.query.filter_by(email='bjornworrall@gmail.com').first()
+        if existing_user:
+            print("User with email bjornworrall@gmail.com already exists.")
+            return
+
+        # Create the new user
+        new_user = User(
+            email='bjornworrall@gmail.com',
+            role='manager',
+            name='bjorn'
+        )
+        new_user.set_password('temp_password')
+        
+        # Add and commit the new user to the database
+        db.session.add(new_user)
+        db.session.commit()
+        
+        print("Admin user created successfully:")
+        print(f"Email: {new_user.email}")
+        print(f"Role: {new_user.role}")
+        print(f"Name: {new_user.name}")
 
 
 @application.route('/api/login', methods=['POST'])
@@ -349,11 +373,60 @@ def init_db():
 init_db()
 
 
-# Add this function to support testing
 def create_application(config_object=None):
+    app = Flask(__name__)
+    
     if config_object:
-        application.config.from_object(config_object)
-    return application
+        app.config.from_object(config_object)
+    else:
+        # Load the default configuration
+        app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+        app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+        app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+    
+    # Initialize extensions
+    db.init_app(app)
+    login_manager.init_app(app)
+    CORS(app)
+    
+    # Register all routes
+    app.add_url_rule('/', 'hello', hello)
+    app.add_url_rule('/api/health', 'health_check', health_check)
+    app.add_url_rule('/api/login', 'login', login, methods=['POST'])
+    app.add_url_rule('/api/logout', 'logout', logout)
+    app.add_url_rule('/api/users', 'handle_users', handle_users, methods=['GET', 'POST'])
+    app.add_url_rule('/api/users/<int:user_id>', 'manage_user', manage_user, methods=['PUT', 'DELETE'])
+    app.add_url_rule('/api/shifts', 'handle_shifts', handle_shifts, methods=['GET', 'POST'])
+    app.add_url_rule('/api/shifts/<int:shift_id>', 'manage_shift', manage_shift, methods=['PUT', 'DELETE'])
+    app.add_url_rule('/api/check_users', 'check_users', check_users)
+    
+    return app
 
 if __name__ == '__main__':
+    application = create_application()
+    
+    with application.app_context():
+        db.create_all()
+        
+        # Check if admin user exists, if not, create it
+        admin_email = os.getenv('ADMIN_EMAIL')
+        admin_password = os.getenv('ADMIN_PASSWORD')
+        admin_name = os.getenv('ADMIN_NAME')
+        
+        if not admin_email or not admin_password or not admin_name:
+            print("Error: ADMIN_EMAIL, ADMIN_PASSWORD, and ADMIN_NAME must be set in environment variables.")
+        else:
+            if not User.query.filter_by(email=admin_email).first():
+                admin_user = User(
+                    email=admin_email,
+                    role='manager',
+                    name=admin_name
+                )
+                admin_user.set_password(admin_password)
+                db.session.add(admin_user)
+                db.session.commit()
+                print(f"Admin user created: {admin_email}")
+            else:
+                print(f"Admin user already exists: {admin_email}")
+    
     application.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))

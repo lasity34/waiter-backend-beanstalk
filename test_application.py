@@ -1,19 +1,11 @@
-# test_application.py
-
 import pytest
-from application import create_app, db, User, Shift
-from flask_login import login_user
-from datetime import datetime, time, timedelta
-
-class TestConfig:
-    TESTING = True
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-    WTF_CSRF_ENABLED = False
-    SECRET_KEY = 'test_secret_key'
+from application import create_application, db, User, Shift
+from test_config import TestConfig
+from datetime import datetime, time
 
 @pytest.fixture(scope='module')
 def app():
-    app = create_app(TestConfig)
+    app = create_application(TestConfig)
     
     with app.app_context():
         db.create_all()
@@ -21,13 +13,15 @@ def app():
         db.session.remove()
         db.drop_all()
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def client(app):
     return app.test_client()
 
-@pytest.fixture
+@pytest.fixture(scope='function')
 def init_database(app):
     with app.app_context():
+        db.create_all()
+        
         # Create test users
         admin = User(email='admin@test.com', role='manager', name='Admin')
         admin.set_password('adminpass')
@@ -53,7 +47,6 @@ def init_database(app):
 
         yield
 
-        # Clean up
         db.session.remove()
         db.drop_all()
 
@@ -62,6 +55,8 @@ def login_user(client, email, password):
         'email': email,
         'password': password
     })
+
+
 
 def test_database_uri(app):
     assert app.config['SQLALCHEMY_DATABASE_URI'] == 'sqlite:///:memory:', \
