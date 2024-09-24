@@ -23,10 +23,13 @@ application = Flask(__name__)
 logger.info("Flask app initialized")
 
 
+# CORS configuration
 CORS(application, resources={r"/api/*": {
     "origins": [
-        "http://localhost:3000",  # Development environment
-        "https://d1ozcmsi9wy8ty.cloudfront.net"  # Production environment
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://192.168.58.188:3000",
+        "https://d1ozcmsi9wy8ty.cloudfront.net",
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"],
@@ -35,9 +38,18 @@ CORS(application, resources={r"/api/*": {
 
 @application.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://192.168.58.188:3000",
+        "https://d1ozcmsi9wy8ty.cloudfront.net",
+    ]
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
     return response
 
 
@@ -111,6 +123,7 @@ def login():
         response = make_response()
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
         response.headers.add('Access-Control-Max-Age', '3600')
         return response
 
