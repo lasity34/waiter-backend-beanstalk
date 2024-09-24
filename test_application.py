@@ -1,5 +1,5 @@
 import pytest
-from application import create_application, db, User, Shift, send_shift_notification
+from application import create_application, db, User, Shift, notify_shift_change, send_email_notification
 from test_config import TestConfig
 from datetime import datetime, time
 
@@ -8,7 +8,7 @@ def app():
     app = create_application(TestConfig)
     
     with app.app_context():
-        db.create_all()
+        db.create_all()  # This ensures all tables are created
         yield app
         db.session.remove()
         db.drop_all()
@@ -20,7 +20,7 @@ def client(app):
 @pytest.fixture(scope='function')
 def init_database(app):
     with app.app_context():
-        db.create_all()
+        db.create_all()  # Create tables for each test function
         
         # Create test users
         admin = User(email='admin@test.com', role='manager', name='Admin')
@@ -123,8 +123,8 @@ def test_update_shift(client, init_database, mocker):
     shifts = response.get_json()
     shift_id = shifts[0]['id']
     
-    # Mock the send_shift_notification function to return 202 (success)
-    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=202)
+    # Mock the notify_shift_change function
+    mock_notify = mocker.patch('application.notify_shift_change')
     
     # Now update the shift
     response = client.put(f'/api/shifts/{shift_id}', json={
@@ -132,8 +132,8 @@ def test_update_shift(client, init_database, mocker):
         'status': 'approved'
     })
     assert response.status_code == 200
-    assert b'Shift updated successfully and notification sent' in response.data
-    mock_send_notification.assert_called_once()
+    assert b'Shift updated successfully' in response.data
+    mock_notify.assert_called_once()
 
 
 def test_delete_shift(client, init_database):
@@ -253,21 +253,51 @@ def test_create_duplicate_shift(client, init_database):
 
 # notifications
 
-def test_send_shift_notification(app, mocker):
+def test_send_email_notification(app, mocker):
     with app.app_context():
         mock_sendgrid = mocker.patch('application.SendGridAPIClient')
         mock_sendgrid.return_value.send.return_value.status_code = 202
         
-        status_code = send_shift_notification(
+        status_code = send_email_notification(
             'test@example.com',
-            'Test User',
-            '2023-06-01',
-            '09:00 - 17:00'
+            'Test Subject',
+            '<strong>Test Content</strong>'
         )
         
         assert status_code == 202
         mock_sendgrid.assert_called_once()
         mock_sendgrid.return_value.send.assert_called_once()
+
+
+def test_notify_shift_change(app, init_database, mocker):
+    with app.app_context():
+        # Get the existing user from the database
+        user = User.query.filter_by(email='waiter@test.com').first()
+        assert user is not None, "User not found in the database"
+
+        # Create a new shift for the existing user
+        shift = Shift(
+            user_id=user.id,
+            date=datetime(2023, 6, 1).date(),
+            start_time=datetime(2023, 6, 1, 9, 0).time(),
+            end_time=datetime(2023, 6, 1, 17, 0).time(),
+            shift_type='morning',
+            status='approved'
+        )
+        db.session.add(shift)
+        db.session.commit()
+
+        mock_send_email = mocker.patch('application.send_email_notification')
+        mock_send_email.return_value = 202
+        
+        notify_shift_change(shift, 'updated')
+        
+        assert mock_send_email.call_count == 2
+
+        # Clean up
+        db.session.delete(shift)
+        db.session.commit()
+
 
 def test_manage_shift_with_notification(client, init_database, mocker):
     login_user(client, 'admin@test.com', 'adminpass')
@@ -277,17 +307,18 @@ def test_manage_shift_with_notification(client, init_database, mocker):
     shifts = response.get_json()
     shift_id = shifts[0]['id']
     
-    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=202)
+    mock_notify = mocker.patch('application.notify_shift_change')
     
-    # Now update the shift and approve it
+    # Now update the shift
     response = client.put(f'/api/shifts/{shift_id}', json={
         'shift_type': 'evening',
         'status': 'approved'
     })
     
     assert response.status_code == 200
-    assert b'Shift updated successfully and notification sent' in response.data
-    mock_send_notification.assert_called_once()
+    assert b'Shift updated successfully' in response.data
+    mock_notify.assert_called_once()
+
 
 def test_manage_shift_with_failed_notification(client, init_database, mocker):
     login_user(client, 'admin@test.com', 'adminpass')
@@ -297,7 +328,8 @@ def test_manage_shift_with_failed_notification(client, init_database, mocker):
     shifts = response.get_json()
     shift_id = shifts[0]['id']
     
-    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=500)
+    # Mock send_email_notification to return None (simulating a failure)
+    mock_send_email = mocker.patch('application.send_email_notification', return_value=None)
     
     # Now update the shift and approve it
     response = client.put(f'/api/shifts/{shift_id}', json={
@@ -305,6 +337,20 @@ def test_manage_shift_with_failed_notification(client, init_database, mocker):
         'status': 'approved'
     })
     
-    assert response.status_code == 500
-    assert b'Shift updated successfully but failed to send notification' in response.data
-    mock_send_notification.assert_called_once()
+    assert response.status_code == 200
+    assert b'Shift updated successfully' in response.data
+    mock_send_email.assert_called()
+
+
+def test_create_user_with_notification(client, init_database, mocker):
+    mock_send_email = mocker.patch('application.send_email_notification')
+    login_user(client, 'admin@test.com', 'adminpass')
+    response = client.post('/api/users', json={
+        'email': 'newuser@test.com',
+        'password': 'newuserpass',
+        'role': 'waiter',
+        'name': 'New User'
+    })
+    assert response.status_code == 201
+    assert b'User created successfully' in response.data
+    mock_send_email.assert_called_once()

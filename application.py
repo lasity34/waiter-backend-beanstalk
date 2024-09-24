@@ -187,14 +187,27 @@ def handle_users():
         data = request.json
         if User.query.filter_by(email=data['email']).first():
             return jsonify({'message': 'Email already registered'}), 400
+        
         new_user = User(email=data['email'], role=data['role'], name=data['name'])
         new_user.set_password(data['password'])
         db.session.add(new_user)
         db.session.commit()
+        
+        # Send email notification
+        subject = "Your New Account"
+        content = f"""
+        <strong>Hello {new_user.name},</strong><br>
+        Your account has been created with the following details:<br>
+        Email: {new_user.email}<br>
+        Please log in to your account and change your password.
+        """
+        send_email_notification(new_user.email, subject, content)
+        
         return jsonify({'message': 'User created successfully', 'id': new_user.id}), 201
     else:
         users = User.query.all()
         return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
+    
 
 @application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
 @login_required
@@ -238,21 +251,43 @@ def check_users():
 
 # notifications
 
-def send_shift_notification(to_email, user_name, shift_date, shift_time):
+def send_email_notification(to_email, subject, content):
     message = Mail(
-        from_email=os.environ.get('FROM_EMAIL', 'default@example.com'),
+        from_email=os.environ.get('FROM_EMAIL'),
         to_emails=to_email,
-        subject='Shift Notification',
-        html_content=f'<strong>Hello {user_name},</strong><br>You have a shift on {shift_date} at {shift_time}.'
+        subject=subject,
+        html_content=content
     )
     try:
         sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
         response = sg.send(message)
         return response.status_code
     except Exception as e:
-        print(str(e))
+        print(f"Error sending email: {str(e)}")
         return None
+    
 
+def notify_shift_change(shift, action):
+    user = User.query.get(shift.user_id)
+    managers = User.query.filter_by(role='manager').all()
+    
+    subject = f"Shift {action.capitalize()}"
+    content = f"""
+    <strong>Hello,</strong><br>
+    A shift has been {action} with the following details:<br>
+    User: {user.name}<br>
+    Date: {shift.date.strftime('%Y-%m-%d')}<br>
+    Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
+    Type: {shift.shift_type}<br>
+    Status: {shift.status}
+    """
+    
+    # Notify the user
+    send_email_notification(user.email, subject, content)
+    
+    # Notify all managers
+    for manager in managers:
+        send_email_notification(manager.email, subject, content)
 
 
 @application.route('/api/shifts', methods=['GET', 'POST'])
@@ -315,10 +350,10 @@ def manage_shift(shift_id):
         return jsonify({'message': 'Unauthorized'}), 403
    
     shift = Shift.query.get_or_404(shift_id)
-    
+   
     if request.method == 'PUT':
         data = request.json
-        
+       
         if 'shift_type' in data:
             shift.shift_type = data['shift_type']
             if data['shift_type'] == 'morning':
@@ -330,33 +365,25 @@ def manage_shift(shift_id):
             elif data['shift_type'] == 'double':
                 shift.start_time = datetime.strptime('09:00', '%H:%M').time()
                 shift.end_time = datetime.strptime('01:00', '%H:%M').time()
-        
+       
         for field in ['status', 'date', 'user_id']:
             if field in data:
                 if field == 'date':
                     setattr(shift, field, datetime.strptime(data[field], '%Y-%m-%d').date())
                 else:
                     setattr(shift, field, data[field])
-
+        
         db.session.commit()
-
-        # Send email notification if shift is approved
-        if data.get('status') == 'approved':
-            user = User.query.get(shift.user_id)
-            status_code = send_shift_notification(
-                user.email,
-                user.name,
-                shift.date.strftime('%Y-%m-%d'),
-                f"{shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}"
-            )
-            if status_code == 202:
-                return jsonify({'message': 'Shift updated successfully and notification sent'}), 200
-            else:
-                return jsonify({'message': 'Shift updated successfully but failed to send notification'}), 500
-
+        
+        # Send notification for shift update
+        notify_shift_change(shift, 'updated')
+        
         return jsonify({'message': 'Shift updated successfully'}), 200
-    
+   
     elif request.method == 'DELETE':
+        # Send notification before deleting the shift
+        notify_shift_change(shift, 'deleted')
+        
         db.session.delete(shift)
         db.session.commit()
         return jsonify({'message': 'Shift deleted successfully'}), 200
