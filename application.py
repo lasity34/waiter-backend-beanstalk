@@ -30,9 +30,15 @@ CORS(application, resources={r"/api/*": {
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"],
-    "supports_credentials": True,
-    "expose_headers": ["Access-Control-Allow-Credentials"], 
+    "supports_credentials": True
 }})
+
+@application.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 
 # Configuration
@@ -98,8 +104,16 @@ def health_check():
     return jsonify({"status": "healthy"}), 200
 
 
-@application.route('/api/login', methods=['POST'])
+@application.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
+    if request.method == 'OPTIONS':
+        # Handling OPTIONS request for CORS preflight
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Max-Age', '3600')
+        return response
+
     logger.info("Login attempt received")
     logger.info(f"Request method: {request.method}")
     logger.info(f"Request headers: {request.headers}")
@@ -112,29 +126,30 @@ def login():
         if not data or 'email' not in data or 'password' not in data:
             logger.warning("Invalid login data received")
             return jsonify({'message': 'Invalid login data'}), 400
-        
+       
         user = User.query.filter_by(email=data['email']).first()
        
         if not user:
             logger.warning(f"No user found for email: {data['email']}")
             return jsonify({'message': 'Invalid email or password'}), 401
-        
+       
         if not user.check_password(data['password']):
             logger.warning(f"Incorrect password for email: {data['email']}")
             return jsonify({'message': 'Invalid email or password'}), 401
-        
+       
         login_user(user, remember=data.get('remember', False))
         logger.info(f"Login successful for user: {user.email}")
-        return jsonify({
+        response = jsonify({
             'message': 'Logged in successfully',
             'role': user.role,
             'name': user.name,
             'id': user.id
         })
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
     except Exception as e:
         logger.error(f"Exception in login route: {str(e)}", exc_info=True)
         return jsonify({'message': 'An error occurred during login'}), 500
-
 
 
 @application.route('/api/update_password_hashes', methods=['POST'])
