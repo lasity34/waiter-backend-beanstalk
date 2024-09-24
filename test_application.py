@@ -1,5 +1,5 @@
 import pytest
-from application import create_application, db, User, Shift
+from application import create_application, db, User, Shift, send_shift_notification
 from test_config import TestConfig
 from datetime import datetime, time
 
@@ -58,15 +58,17 @@ def login_user(client, email, password):
 
 
 
+
 def test_database_uri(app):
     assert app.config['SQLALCHEMY_DATABASE_URI'] == 'sqlite:///:memory:', \
         "Test is not using in-memory SQLite database"
 
-# The rest of your test functions remain the same
 def test_login_success(client, init_database):
     response = login_user(client, 'admin@test.com', 'adminpass')
     assert response.status_code == 200
     assert b'Logged in successfully' in response.data
+
+
 
 def test_login_failure(client, init_database):
     response = login_user(client, 'admin@test.com', 'wrongpass')
@@ -114,12 +116,15 @@ def test_get_shifts(client, init_database):
     assert len(shifts) == 1
     assert shifts[0]['shift_type'] == 'morning'
 
-def test_update_shift(client, init_database):
+def test_update_shift(client, init_database, mocker):
     login_user(client, 'admin@test.com', 'adminpass')
     # First, get the shift id
     response = client.get('/api/shifts')
     shifts = response.get_json()
     shift_id = shifts[0]['id']
+    
+    # Mock the send_shift_notification function to return 202 (success)
+    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=202)
     
     # Now update the shift
     response = client.put(f'/api/shifts/{shift_id}', json={
@@ -127,7 +132,9 @@ def test_update_shift(client, init_database):
         'status': 'approved'
     })
     assert response.status_code == 200
-    assert b'Shift updated successfully' in response.data
+    assert b'Shift updated successfully and notification sent' in response.data
+    mock_send_notification.assert_called_once()
+
 
 def test_delete_shift(client, init_database):
     login_user(client, 'admin@test.com', 'adminpass')
@@ -242,4 +249,62 @@ def test_create_duplicate_shift(client, init_database):
     })
     assert response.status_code == 400
     assert b'You already have a shift on this day' in response.data
-# Add more tests as needed
+
+
+# notifications
+
+def test_send_shift_notification(app, mocker):
+    with app.app_context():
+        mock_sendgrid = mocker.patch('application.SendGridAPIClient')
+        mock_sendgrid.return_value.send.return_value.status_code = 202
+        
+        status_code = send_shift_notification(
+            'test@example.com',
+            'Test User',
+            '2023-06-01',
+            '09:00 - 17:00'
+        )
+        
+        assert status_code == 202
+        mock_sendgrid.assert_called_once()
+        mock_sendgrid.return_value.send.assert_called_once()
+
+def test_manage_shift_with_notification(client, init_database, mocker):
+    login_user(client, 'admin@test.com', 'adminpass')
+    
+    # First, get the shift id
+    response = client.get('/api/shifts')
+    shifts = response.get_json()
+    shift_id = shifts[0]['id']
+    
+    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=202)
+    
+    # Now update the shift and approve it
+    response = client.put(f'/api/shifts/{shift_id}', json={
+        'shift_type': 'evening',
+        'status': 'approved'
+    })
+    
+    assert response.status_code == 200
+    assert b'Shift updated successfully and notification sent' in response.data
+    mock_send_notification.assert_called_once()
+
+def test_manage_shift_with_failed_notification(client, init_database, mocker):
+    login_user(client, 'admin@test.com', 'adminpass')
+    
+    # First, get the shift id
+    response = client.get('/api/shifts')
+    shifts = response.get_json()
+    shift_id = shifts[0]['id']
+    
+    mock_send_notification = mocker.patch('application.send_shift_notification', return_value=500)
+    
+    # Now update the shift and approve it
+    response = client.put(f'/api/shifts/{shift_id}', json={
+        'shift_type': 'evening',
+        'status': 'approved'
+    })
+    
+    assert response.status_code == 500
+    assert b'Shift updated successfully but failed to send notification' in response.data
+    mock_send_notification.assert_called_once()

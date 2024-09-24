@@ -1,5 +1,4 @@
 import os
-import sys
 import logging
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -9,6 +8,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from sqlalchemy.orm import joinedload
 from dotenv import load_dotenv
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # Load the .env file from the current directory
 load_dotenv()
@@ -103,30 +104,7 @@ def hello():
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
-def create_specific_admin():
-    with application.app_context():
-        # Check if the user already exists
-        existing_user = User.query.filter_by(email='bjornworrall@gmail.com').first()
-        if existing_user:
-            print("User with email bjornworrall@gmail.com already exists.")
-            return
 
-        # Create the new user
-        new_user = User(
-            email='bjornworrall@gmail.com',
-            role='manager',
-            name='bjorn'
-        )
-        new_user.set_password('temp_password')
-        
-        # Add and commit the new user to the database
-        db.session.add(new_user)
-        db.session.commit()
-        
-        print("Admin user created successfully:")
-        print(f"Email: {new_user.email}")
-        print(f"Role: {new_user.role}")
-        print(f"Name: {new_user.name}")
 
 
 @application.route('/api/login', methods=['POST'])
@@ -258,6 +236,23 @@ def check_users():
     return jsonify(user_info)
 
 
+# notifications
+
+def send_shift_notification(to_email, user_name, shift_date, shift_time):
+    message = Mail(
+        from_email=os.environ.get('FROM_EMAIL', 'default@example.com'),
+        to_emails=to_email,
+        subject='Shift Notification',
+        html_content=f'<strong>Hello {user_name},</strong><br>You have a shift on {shift_date} at {shift_time}.'
+    )
+    try:
+        sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+        response = sg.send(message)
+        return response.status_code
+    except Exception as e:
+        print(str(e))
+        return None
+
 
 
 @application.route('/api/shifts', methods=['GET', 'POST'])
@@ -312,6 +307,7 @@ def handle_shifts():
         except Exception as e:
             return jsonify({'message': 'Failed to fetch shifts', 'error': str(e)}), 500
 
+
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
 @login_required
 def manage_shift(shift_id):
@@ -343,12 +339,28 @@ def manage_shift(shift_id):
                     setattr(shift, field, data[field])
 
         db.session.commit()
-        return jsonify({'message': 'Shift updated successfully'})
+
+        # Send email notification if shift is approved
+        if data.get('status') == 'approved':
+            user = User.query.get(shift.user_id)
+            status_code = send_shift_notification(
+                user.email,
+                user.name,
+                shift.date.strftime('%Y-%m-%d'),
+                f"{shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}"
+            )
+            if status_code == 202:
+                return jsonify({'message': 'Shift updated successfully and notification sent'}), 200
+            else:
+                return jsonify({'message': 'Shift updated successfully but failed to send notification'}), 500
+
+        return jsonify({'message': 'Shift updated successfully'}), 200
     
     elif request.method == 'DELETE':
         db.session.delete(shift)
         db.session.commit()
-        return jsonify({'message': 'Shift deleted successfully'})
+        return jsonify({'message': 'Shift deleted successfully'}), 200
+    
 
 def init_db():
     with application.app_context():
