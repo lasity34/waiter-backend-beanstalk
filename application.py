@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 application = Flask(__name__)
 logger.info("Flask app initialized")
 
+
+CORS(application, resources={r"/api/*": {
+    "origins": [
+        "http://localhost:3000",  # Development environment
+        "https://d1ozcmsi9wy8ty.cloudfront.net"  # Production environment
+    ],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "supports_credentials": True,
+    "expose_headers": ["Access-Control-Allow-Credentials"], 
+}})
+
+
 # Configuration
 application.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -39,28 +52,8 @@ if not application.config['SQLALCHEMY_DATABASE_URI']:
 db = SQLAlchemy(application)
 login_manager = LoginManager(application)
 
-allowed_origins = [
-    origin.strip() 
-    for origin in os.getenv('ALLOWED_ORIGINS', 'https://d1ozcmsi9wy8ty.cloudfront.net,http://localhost:3000').split(',')
-]
-logger.info(f"Allowed origins: {allowed_origins}")
 
-CORS(application, resources={r"/api/*": {
-    "origins": allowed_origins, 
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], 
-    "allow_headers": ["Content-Type", "Authorization"],
-    "supports_credentials": True
-}})
 
-@application.after_request
-def after_request(response):
-    origin = request.headers.get('Origin')
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
 
 # Models
 class User(UserMixin, db.Model):
@@ -105,12 +98,12 @@ def health_check():
     return jsonify({"status": "healthy"}), 200
 
 
-
-
 @application.route('/api/login', methods=['POST'])
 def login():
     logger.info("Login attempt received")
+    logger.info(f"Request method: {request.method}")
     logger.info(f"Request headers: {request.headers}")
+    logger.info(f"Request data: {request.data}")
    
     try:
         data = request.get_json()
@@ -143,12 +136,6 @@ def login():
         return jsonify({'message': 'An error occurred during login'}), 500
 
 
-
-
-@application.route('/api/login', methods=['OPTIONS'])
-def handle_login_preflight():
-    response = application.make_default_options_response()
-    return after_request(response)
 
 @application.route('/api/update_password_hashes', methods=['POST'])
 def update_password_hashes():
