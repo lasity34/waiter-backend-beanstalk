@@ -5,3 +5,4 @@ Flask-CORS==3.0.10
 psycopg2-binary==2.9.5
 Werkzeug==2.3.7
 python-dotenv==1.0.0
+sendgrid==6.9.7
