@@ -11,27 +11,16 @@ from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from urllib.parse import quote
+from secrets import token_urlsafe
 
-# Load the .env file from the current directory
+# Load environment variables and configure logging
 load_dotenv()
-
-# Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
+# Initialize Flask app and extensions
 application = Flask(__name__)
 logger.info("Flask app initialized")
-
-allowed_origins = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,https://localhost:3000').split(',')
-
-CORS(application, resources={r"/api/*": {
-    "origins": allowed_origins,
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    "allow_headers": ["Content-Type", "Authorization"],
-    "supports_credentials": True
-}})
-
 
 # Configuration
 application.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
@@ -39,19 +28,16 @@ application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 application.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 
 if not application.config['SECRET_KEY']:
-    logger.error("No SECRET_KEY set for Flask application")
     raise ValueError("No SECRET_KEY set for Flask application")
-
 if not application.config['SQLALCHEMY_DATABASE_URI']:
-    logger.error("No DATABASE_URL set for Flask application")
     raise ValueError("No DATABASE_URL set for Flask application")
 
-# Initialize extensions
 db = SQLAlchemy(application)
 login_manager = LoginManager(application)
 
-
-
+# CORS configuration
+allowed_origins = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,https://localhost:3000').split(',')
+CORS(application, resources={r"/api/*": {"origins": allowed_origins, "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"], "supports_credentials": True}})
 
 # Models
 class User(UserMixin, db.Model):
@@ -62,15 +48,10 @@ class User(UserMixin, db.Model):
     name = db.Column(db.String(100), nullable=False)
 
     def set_password(self, password):
-        logger.info(f"Setting new password for user: {self.email}")
         self.password_hash = generate_password_hash(password)
-        logger.info(f"New password hash generated for user: {self.email}")
 
     def check_password(self, password):
-        logger.info(f"Checking password for user: {self.email}")
-        result = check_password_hash(self.password_hash, password)
-        logger.info(f"Password check result for user {self.email}: {'Success' if result else 'Failure'}")
-        return result
+        return check_password_hash(self.password_hash, password)
 
 class Shift(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -86,170 +67,7 @@ class Shift(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Routes
-@application.route('/')
-def hello():
-    return jsonify({"message": "Carin is moois"}), 200
-
-@application.route('/api/health')
-def health_check():
-    return jsonify({"status": "healthy"}), 200
-
-@application.route('/api/test-cors', methods=['GET', 'OPTIONS'])
-@cross_origin(origins=allowed_origins, supports_credentials=True)
-def test_cors():
-    return jsonify({"message": "CORS is working"}), 200
-
-
-@application.route('/api/login', methods=['POST', 'OPTIONS'])
-@cross_origin(origins=allowed_origins, supports_credentials=True)
-def login():
-    if request.method == 'OPTIONS':
-        response = make_response()
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response
-
-    logger.info("Login attempt received")
-    logger.info(f"Request method: {request.method}")
-    logger.info(f"Request headers: {request.headers}")
-    logger.info(f"Request data: {request.data}")
-   
-    try:
-        data = request.get_json()
-        logger.info(f"Parsed JSON data: {data}")
-       
-        if not data or 'email' not in data or 'password' not in data:
-            logger.warning("Invalid login data received")
-            return jsonify({'message': 'Invalid login data'}), 400
-       
-        user = User.query.filter_by(email=data['email']).first()
-       
-        if not user:
-            logger.warning(f"No user found for email: {data['email']}")
-            return jsonify({'message': 'Invalid email or password'}), 401
-       
-        if not user.check_password(data['password']):
-            logger.warning(f"Incorrect password for email: {data['email']}")
-            return jsonify({'message': 'Invalid email or password'}), 401
-       
-        login_user(user, remember=data.get('remember', False))
-        logger.info(f"Login successful for user: {user.email}")
-        
-        response = jsonify({
-            'message': 'Logged in successfully',
-            'role': user.role,
-            'name': user.name,
-            'id': user.id
-        })
-        return response, 200
-    except Exception as e:
-        logger.error(f"Exception in login route: {str(e)}", exc_info=True)
-        return jsonify({'message': 'An error occurred during login'}), 500
-    
-
-@application.route('/api/update_password_hashes', methods=['POST'])
-def update_password_hashes():
-    users = User.query.all()
-    for user in users:
-        # Set a temporary password for all users
-        user.set_password('temp_password')
-    db.session.commit()
-    return jsonify({'message': 'All user passwords updated to temporary password'})
-
-
-@application.route('/api/update_user_password', methods=['POST'])
-def update_user_password():
-    data = request.json
-    user = User.query.filter_by(email=data['email']).first()
-    if not user:
-        return jsonify({'message': 'User not found'}), 404
-    user.set_password(data['new_password'])
-    db.session.commit()
-    return jsonify({'message': 'Password updated successfully'})
-
-
-@application.route('/api/logout')
-@login_required
-def logout():
-    logout_user()
-    return jsonify({'message': 'Logged out successfully'})
-
-@application.route('/api/users', methods=['GET', 'POST'])
-@login_required
-def handle_users():
-    if current_user.role != 'manager':
-        return jsonify({'message': 'Unauthorized'}), 403
-    
-    if request.method == 'POST':
-        data = request.json
-        if User.query.filter_by(email=data['email']).first():
-            return jsonify({'message': 'Email already registered'}), 400
-        
-        new_user = User(email=data['email'], role=data['role'], name=data['name'])
-        new_user.set_password(data['password'])
-        db.session.add(new_user)
-        db.session.commit()
-        
-        # Send email notification
-        subject = "Your New Account"
-        content = f"""
-        <strong>Hello {new_user.name},</strong><br>
-        Your account has been created with the following details:<br>
-        Email: {new_user.email}<br>
-        Please log in to your account and change your password.
-        """
-        send_email_notification(new_user.email, subject, content)
-        
-        return jsonify({'message': 'User created successfully', 'id': new_user.id}), 201
-    else:
-        users = User.query.all()
-        return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
-    
-
-@application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
-@login_required
-def manage_user(user_id):
-    if current_user.role != 'manager':
-        return jsonify({'message': 'Unauthorized'}), 403
-    
-    user = User.query.get_or_404(user_id)
-    
-    if request.method == 'PUT':
-        data = request.json
-        user.name = data.get('name', user.name)
-        user.email = data.get('email', user.email)
-        user.role = data.get('role', user.role)
-        if 'password' in data:
-            user.set_password(data['password'])
-        db.session.commit()
-        return jsonify({'message': 'User updated successfully'})
-    
-    elif request.method == 'DELETE':
-        # Check if the user has any associated shifts
-        if Shift.query.filter_by(user_id=user_id).first():
-            return jsonify({'message': 'Cannot delete user with associated shifts'}), 400
-        
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({'message': 'User deleted successfully'})
-    
-# test
-
-@application.route('/api/check_users', methods=['GET'])
-def check_users():
-    users = User.query.all()
-    user_info = [{
-        'email': user.email,
-        'role': user.role,
-        'password_hash': user.password_hash[:20] + '...'  # Only show part of the hash for security
-    } for user in users]
-    return jsonify(user_info)
-
-
-# notifications
-
+# Helper functions
 def send_email_notification(to_email, subject, content):
     message = Mail(
         from_email=os.environ.get('FROM_EMAIL'),
@@ -266,14 +84,12 @@ def send_email_notification(to_email, subject, content):
     except Exception as e:
         logger.error(f"Error sending email: {str(e)}")
         return None
-    
+
 def generate_shift_link(shift_date, user_role):
     base_url = os.environ.get('FRONTEND_URL', 'https://d1ozcmsi9wy8ty.cloudfront.net')
     encoded_date = quote(shift_date.isoformat())
-    if user_role == 'manager':
-        return f"{base_url}/manager-dashboard?date={encoded_date}"
-    else:
-        return f"{base_url}/waiter-dashboard?date={encoded_date}"
+    return f"{base_url}/{'manager' if user_role == 'manager' else 'waiter'}-dashboard?date={encoded_date}"
+
 
 
 def notify_shift_change(shift, action):
@@ -304,14 +120,9 @@ def notify_shift_change(shift, action):
     <a href="{manager_link}">Click here to view this shift in the calendar</a>
     """
     
-    # Notify the user
     send_email_notification(user.email, subject, user_content)
-    
-    # Notify all managers
     for manager in managers:
         send_email_notification(manager.email, subject, manager_content)
-
-
 
 def notify_shift_creation(shift):
     user = User.query.get(shift.user_id)
@@ -341,26 +152,161 @@ def notify_shift_creation(shift):
     <a href="{manager_link}">Click here to view this shift in the calendar</a>
     """
     
-    # Notify the user
-    logger.info(f"Attempting to send email to user: {user.email}")
     user_notification = send_email_notification(user.email, subject, user_content)
-    logger.info(f"Email sent to user. Result: {user_notification}")
+    manager_notifications = [send_email_notification(manager.email, subject, manager_content) for manager in managers]
     
-    # Notify all managers
-    manager_notifications = []
-    for manager in managers:
-        logger.info(f"Attempting to send email to manager: {manager.email}")
-        result = send_email_notification(manager.email, subject, manager_content)
-        logger.info(f"Email sent to manager. Result: {result}")
-        manager_notifications.append(result)
+    return all([user_notification] + manager_notifications)
+
+# Routes
+@application.route('/')
+def hello():
+    return jsonify({"message": "Carin is moois"}), 200
+
+@application.route('/api/health')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
+@application.route('/api/test-cors', methods=['GET', 'OPTIONS'])
+@cross_origin(origins=allowed_origins, supports_credentials=True)
+def test_cors():
+    return jsonify({"message": "CORS is working"}), 200
+
+# Authentication routes
+@application.route('/api/login', methods=['POST', 'OPTIONS'])
+@cross_origin(origins=allowed_origins, supports_credentials=True)
+def login():
+    if request.method == 'OPTIONS':
+        return make_response()
+
+    data = request.get_json()
+    if not data or 'email' not in data or 'password' not in data:
+        return jsonify({'message': 'Invalid login data'}), 400
+
+    user = User.query.filter_by(email=data['email']).first()
+    if not user or not user.check_password(data['password']):
+        return jsonify({'message': 'Invalid email or password'}), 401
+
+    login_user(user, remember=data.get('remember', False))
+    return jsonify({
+        'message': 'Logged in successfully',
+        'role': user.role,
+        'name': user.name,
+        'id': user.id
+    }), 200
+
+@application.route('/api/logout')
+@login_required
+def logout():
+    logout_user()
+    return jsonify({'message': 'Logged out successfully'})
+
+# User management routes
+@application.route('/api/users', methods=['GET', 'POST'])
+@login_required
+def handle_users():
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
     
-    all_notifications_sent = all([user_notification] + manager_notifications)
-    logger.info(f"All notifications sent successfully: {all_notifications_sent}")
+    if request.method == 'POST':
+        data = request.json
+        if User.query.filter_by(email=data['email']).first():
+            return jsonify({'message': 'Email already registered'}), 400
+        
+        password = token_urlsafe(12)
+        new_user = User(email=data['email'], role=data['role'], name=data['name'])
+        new_user.set_password(password)
+        db.session.add(new_user)
+        db.session.commit()
+        
+        subject = "Your New Account"
+        content = f"""
+        <strong>Hello {new_user.name},</strong><br>
+        Your account has been created with the following details:<br>
+        Email: {new_user.email}<br>
+        Temporary Password: {password}<br>
+        Please log in to your account and change your password as soon as possible.
+        """
+        send_email_notification(new_user.email, subject, content)
+        
+        return jsonify({'message': 'User created successfully and password sent via email', 'id': new_user.id}), 201
+    else:
+        users = User.query.all()
+        return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
+
+@application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
+@login_required
+def manage_user(user_id):
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
     
-    return all_notifications_sent
+    user = User.query.get_or_404(user_id)
+    
+    if request.method == 'PUT':
+        data = request.json
+        user.name = data.get('name', user.name)
+        user.email = data.get('email', user.email)
+        user.role = data.get('role', user.role)
+        if 'password' in data:
+            user.set_password(data['password'])
+        db.session.commit()
+        return jsonify({'message': 'User updated successfully'})
+    
+    elif request.method == 'DELETE':
+        if Shift.query.filter_by(user_id=user_id).first():
+            return jsonify({'message': 'Cannot delete user with associated shifts'}), 400
+        
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'User deleted successfully'})
 
+@application.route('/api/change_password', methods=['POST'])
+@login_required
+def change_password():
+    data = request.json
+    user = current_user
+    
+    if not user.check_password(data['current_password']):
+        return jsonify({'message': 'Current password is incorrect'}), 400
+    
+    user.set_password(data['new_password'])
+    db.session.commit()
+    
+    subject = "Password Changed"
+    content = f"""
+    <strong>Hello {user.name},</strong><br>
+    Your password has been successfully changed. If you did not make this change, please contact the administrator immediately.
+    """
+    send_email_notification(user.email, subject, content)
+    
+    return jsonify({'message': 'Password changed successfully'}), 200
 
+@application.route('/api/reset_password', methods=['POST'])
+@login_required
+def reset_password():
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
+    
+    data = request.json
+    user = User.query.filter_by(email=data['email']).first()
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    new_password = token_urlsafe(12)
+    user.set_password(new_password)
+    db.session.commit()
+    
+    subject = "Password Reset"
+    content = f"""
+    <strong>Hello {user.name},</strong><br>
+    Your password has been reset. Your new temporary password is: {new_password}<br>
+    Please log in to your account and change your password as soon as possible.
+    """
+    send_email_notification(user.email, subject, content)
+    
+    return jsonify({'message': 'Password reset successfully and sent via email'}), 200
 
+# Shift management routes
 @application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
 def handle_shifts():
@@ -409,7 +355,6 @@ def handle_shifts():
             db.session.add(new_shift)
             db.session.commit()
 
-            # Send notification for shift creation
             notification_sent = notify_shift_creation(new_shift)
             if notification_sent:
                 return jsonify({'message': 'Shift created successfully and notifications sent', 'id': new_shift.id}), 201
@@ -419,7 +364,6 @@ def handle_shifts():
             db.session.rollback()
             logger.error(f"Error creating shift: {str(e)}", exc_info=True)
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
-
 
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
 @login_required
@@ -453,7 +397,6 @@ def manage_shift(shift_id):
         
         try:
             db.session.commit()
-            # Send notification for shift update
             notify_shift_change(shift, 'updated')
             return jsonify({'message': 'Shift updated successfully'}), 200
         except Exception as e:
@@ -463,7 +406,6 @@ def manage_shift(shift_id):
    
     elif request.method == 'DELETE':
         try:
-            # Send notification before deleting the shift
             notify_shift_change(shift, 'deleted')
             db.session.delete(shift)
             db.session.commit()
@@ -473,28 +415,22 @@ def manage_shift(shift_id):
             logger.error(f"Error deleting shift: {str(e)}")
             return jsonify({'message': 'Failed to delete shift', 'error': str(e)}), 500
 
+# Database initialization
 def init_db():
     with application.app_context():
-        try:
-            db.create_all()
-            logger.info("Database tables created successfully")
-            if not User.query.filter_by(email=os.getenv('ADMIN_EMAIL')).first():
-                admin_user = User(
-                    email=os.getenv('ADMIN_EMAIL'),
-                    role='manager',
-                    name='Admin'
-                )
-                admin_user.set_password(os.getenv('ADMIN_PASSWORD'))
-                db.session.add(admin_user)
-                db.session.commit()
-                logger.info("Admin user created successfully")
-        except Exception as e:
-            logger.error(f"Error initializing database: {str(e)}")
-            raise
+        db.create_all()
+        if not User.query.filter_by(email=os.getenv('ADMIN_EMAIL')).first():
+            admin_user = User(
+                email=os.getenv('ADMIN_EMAIL'),
+                role='manager',
+                name='Admin'
+            )
+            admin_user.set_password(os.getenv('ADMIN_PASSWORD'))
+            db.session.add(admin_user)
+            db.session.commit()
 
-# Initialize the database
+
 init_db()
-
 
 def create_application(config_object=None):
     app = Flask(__name__)
@@ -502,12 +438,10 @@ def create_application(config_object=None):
     if config_object:
         app.config.from_object(config_object)
     else:
-        # Load the default configuration
         app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
         app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
         app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
     
-    # Initialize extensions
     db.init_app(app)
     login_manager.init_app(app)
     CORS(app)
@@ -521,7 +455,8 @@ def create_application(config_object=None):
     app.add_url_rule('/api/users/<int:user_id>', 'manage_user', manage_user, methods=['PUT', 'DELETE'])
     app.add_url_rule('/api/shifts', 'handle_shifts', handle_shifts, methods=['GET', 'POST'])
     app.add_url_rule('/api/shifts/<int:shift_id>', 'manage_shift', manage_shift, methods=['PUT', 'DELETE'])
-    app.add_url_rule('/api/check_users', 'check_users', check_users)
+    app.add_url_rule('/api/change_password', 'change_password', change_password, methods=['POST'])
+    app.add_url_rule('/api/reset_password', 'reset_password', reset_password, methods=['POST'])
     app.add_url_rule('/api/test-cors', 'test_cors', test_cors, methods=['GET', 'OPTIONS'])
     
     return app
