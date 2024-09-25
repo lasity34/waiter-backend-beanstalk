@@ -2,7 +2,7 @@ import os
 import logging
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
@@ -22,35 +22,14 @@ logger = logging.getLogger(__name__)
 application = Flask(__name__)
 logger.info("Flask app initialized")
 
+allowed_origins = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,https://localhost:3000').split(',')
 
-# CORS configuration
 CORS(application, resources={r"/api/*": {
-    "origins": [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://192.168.58.188:3000",
-        "https://d1ozcmsi9wy8ty.cloudfront.net",
-    ],
+    "origins": allowed_origins,
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"],
     "supports_credentials": True
 }})
-
-@application.after_request
-def after_request(response):
-    origin = request.headers.get('Origin')
-    allowed_origins = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://192.168.58.188:3000",
-        "https://d1ozcmsi9wy8ty.cloudfront.net",
-    ]
-    if origin in allowed_origins:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
-    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
-    return response
 
 
 # Configuration
@@ -115,16 +94,20 @@ def hello():
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
+@application.route('/api/test-cors', methods=['GET', 'OPTIONS'])
+@cross_origin(origins=allowed_origins, supports_credentials=True)
+def test_cors():
+    return jsonify({"message": "CORS is working"}), 200
+
 
 @application.route('/api/login', methods=['POST', 'OPTIONS'])
+@cross_origin(origins=allowed_origins, supports_credentials=True)
 def login():
     if request.method == 'OPTIONS':
-        # Handling OPTIONS request for CORS preflight
         response = make_response()
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Max-Age', '3600')
         return response
 
     logger.info("Login attempt received")
@@ -152,18 +135,18 @@ def login():
        
         login_user(user, remember=data.get('remember', False))
         logger.info(f"Login successful for user: {user.email}")
+        
         response = jsonify({
             'message': 'Logged in successfully',
             'role': user.role,
             'name': user.name,
             'id': user.id
         })
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response
+        return response, 200
     except Exception as e:
         logger.error(f"Exception in login route: {str(e)}", exc_info=True)
         return jsonify({'message': 'An error occurred during login'}), 500
-
+    
 
 @application.route('/api/update_password_hashes', methods=['POST'])
 def update_password_hashes():
@@ -453,6 +436,7 @@ def create_application(config_object=None):
     app.add_url_rule('/api/shifts', 'handle_shifts', handle_shifts, methods=['GET', 'POST'])
     app.add_url_rule('/api/shifts/<int:shift_id>', 'manage_shift', manage_shift, methods=['PUT', 'DELETE'])
     app.add_url_rule('/api/check_users', 'check_users', check_users)
+    app.add_url_rule('/api/test-cors', 'test_cors', test_cors, methods=['GET', 'OPTIONS'])
     
     return app
 
@@ -483,4 +467,4 @@ if __name__ == '__main__':
             else:
                 print(f"Admin user already exists: {admin_email}")
     
-    application.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    application.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), ssl_context='adhoc')
