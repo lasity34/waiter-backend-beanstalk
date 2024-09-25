@@ -304,11 +304,17 @@ def notify_shift_creation(shift):
     """
     
     # Notify the waiter
-    send_email_notification(user.email, subject, content)
+    waiter_notification = send_email_notification(user.email, subject, content)
     
     # Notify all managers
-    for manager in managers:
-        send_email_notification(manager.email, subject, content)
+    manager_notifications = [send_email_notification(manager.email, subject, content) for manager in managers]
+    
+    # Log the results
+    logger.info(f"Shift creation notification sent to waiter: {user.email}, Result: {waiter_notification}")
+    for manager, result in zip(managers, manager_notifications):
+        logger.info(f"Shift creation notification sent to manager: {manager.email}, Result: {result}")
+    
+    return all([waiter_notification] + manager_notifications)
 
 
 
@@ -341,24 +347,15 @@ def handle_shifts():
         try:
             db.session.commit()
             # Send notification for shift creation
-            notify_shift_creation(new_shift)
-            return jsonify({'message': 'Shift created successfully', 'id': new_shift.id}), 201
+            notification_sent = notify_shift_creation(new_shift)
+            if notification_sent:
+                return jsonify({'message': 'Shift created successfully and notifications sent', 'id': new_shift.id}), 201
+            else:
+                return jsonify({'message': 'Shift created successfully but there was an issue sending notifications', 'id': new_shift.id}), 201
         except Exception as e:
             db.session.rollback()
+            logger.error(f"Error creating shift: {str(e)}")
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
-    
-    elif request.method == 'GET':
-        shifts = Shift.query.options(joinedload(Shift.user)).all()
-        return jsonify([{
-            'id': shift.id,
-            'user_id': shift.user_id,
-            'user_name': shift.user.name,
-            'date': shift.date.isoformat(),
-            'start_time': shift.start_time.isoformat(),
-            'end_time': shift.end_time.isoformat(),
-            'status': shift.status,
-            'shift_type': shift.shift_type,
-        } for shift in shifts]), 200
 
 
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
