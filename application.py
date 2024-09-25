@@ -257,11 +257,13 @@ def send_email_notification(to_email, subject, content):
         html_content=content
     )
     try:
+        logger.info(f"Sending email to {to_email}")
         sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
         response = sg.send(message)
+        logger.info(f"SendGrid API response: {response.status_code}")
         return response.status_code
     except Exception as e:
-        print(f"Error sending email: {str(e)}")
+        logger.error(f"Error sending email: {str(e)}")
         return None
     
 
@@ -304,17 +306,22 @@ def notify_shift_creation(shift):
     """
     
     # Notify the waiter
+    logger.info(f"Attempting to send email to waiter: {user.email}")
     waiter_notification = send_email_notification(user.email, subject, content)
+    logger.info(f"Email sent to waiter. Result: {waiter_notification}")
     
     # Notify all managers
-    manager_notifications = [send_email_notification(manager.email, subject, content) for manager in managers]
+    manager_notifications = []
+    for manager in managers:
+        logger.info(f"Attempting to send email to manager: {manager.email}")
+        result = send_email_notification(manager.email, subject, content)
+        logger.info(f"Email sent to manager. Result: {result}")
+        manager_notifications.append(result)
     
-    # Log the results
-    logger.info(f"Shift creation notification sent to waiter: {user.email}, Result: {waiter_notification}")
-    for manager, result in zip(managers, manager_notifications):
-        logger.info(f"Shift creation notification sent to manager: {manager.email}, Result: {result}")
+    all_notifications_sent = all([waiter_notification] + manager_notifications)
+    logger.info(f"All notifications sent successfully: {all_notifications_sent}")
     
-    return all([waiter_notification] + manager_notifications)
+    return all_notifications_sent
 
 
 
