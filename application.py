@@ -10,6 +10,7 @@ from sqlalchemy.orm import joinedload
 from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from urllib.parse import quote
 
 # Load the .env file from the current directory
 load_dotenv()
@@ -266,59 +267,94 @@ def send_email_notification(to_email, subject, content):
         logger.error(f"Error sending email: {str(e)}")
         return None
     
+def generate_shift_link(shift_date, user_role):
+    base_url = os.environ.get('FRONTEND_URL', 'https://d1ozcmsi9wy8ty.cloudfront.net')
+    encoded_date = quote(shift_date.isoformat())
+    if user_role == 'manager':
+        return f"{base_url}/manager-dashboard?date={encoded_date}"
+    else:
+        return f"{base_url}/waiter-dashboard?date={encoded_date}"
+
 
 def notify_shift_change(shift, action):
     user = User.query.get(shift.user_id)
     managers = User.query.filter_by(role='manager').all()
     
+    user_link = generate_shift_link(shift.date, user.role)
+    manager_link = generate_shift_link(shift.date, 'manager')
+    
     subject = f"Shift {action.capitalize()}"
-    content = f"""
-    <strong>Hello,</strong><br>
+    user_content = f"""
+    <strong>Hello {user.name},</strong><br>
     A shift has been {action} with the following details:<br>
-    User: {user.name}<br>
     Date: {shift.date.strftime('%Y-%m-%d')}<br>
     Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
     Type: {shift.shift_type}<br>
-    Status: {shift.status}
+    Status: {shift.status}<br><br>
+    <a href="{user_link}">Click here to view this shift in your calendar</a>
+    """
+    
+    manager_content = f"""
+    <strong>Hello,</strong><br>
+    A shift has been {action} for {user.name} with the following details:<br>
+    Date: {shift.date.strftime('%Y-%m-%d')}<br>
+    Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
+    Type: {shift.shift_type}<br>
+    Status: {shift.status}<br><br>
+    <a href="{manager_link}">Click here to view this shift in the calendar</a>
     """
     
     # Notify the user
-    send_email_notification(user.email, subject, content)
+    send_email_notification(user.email, subject, user_content)
     
     # Notify all managers
     for manager in managers:
-        send_email_notification(manager.email, subject, content)
+        send_email_notification(manager.email, subject, manager_content)
+
 
 
 def notify_shift_creation(shift):
     user = User.query.get(shift.user_id)
     managers = User.query.filter_by(role='manager').all()
     
+    user_link = generate_shift_link(shift.date, user.role)
+    manager_link = generate_shift_link(shift.date, 'manager')
+    
     subject = "New Shift Created"
-    content = f"""
-    <strong>Hello,</strong><br>
-    A new shift has been created with the following details:<br>
-    Waiter: {user.name}<br>
+    user_content = f"""
+    <strong>Hello {user.name},</strong><br>
+    A new shift has been created for you with the following details:<br>
     Date: {shift.date.strftime('%Y-%m-%d')}<br>
     Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
     Type: {shift.shift_type}<br>
-    Status: {shift.status}
+    Status: {shift.status}<br><br>
+    <a href="{user_link}">Click here to view this shift in your calendar</a>
     """
     
-    # Notify the waiter
-    logger.info(f"Attempting to send email to waiter: {user.email}")
-    waiter_notification = send_email_notification(user.email, subject, content)
-    logger.info(f"Email sent to waiter. Result: {waiter_notification}")
+    manager_content = f"""
+    <strong>Hello,</strong><br>
+    A new shift has been created for {user.name} with the following details:<br>
+    Date: {shift.date.strftime('%Y-%m-%d')}<br>
+    Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
+    Type: {shift.shift_type}<br>
+    Status: {shift.status}<br><br>
+    <a href="{manager_link}">Click here to view this shift in the calendar</a>
+    """
+    
+    # Notify the user
+    logger.info(f"Attempting to send email to user: {user.email}")
+    user_notification = send_email_notification(user.email, subject, user_content)
+    logger.info(f"Email sent to user. Result: {user_notification}")
     
     # Notify all managers
     manager_notifications = []
     for manager in managers:
         logger.info(f"Attempting to send email to manager: {manager.email}")
-        result = send_email_notification(manager.email, subject, content)
+        result = send_email_notification(manager.email, subject, manager_content)
         logger.info(f"Email sent to manager. Result: {result}")
         manager_notifications.append(result)
     
-    all_notifications_sent = all([waiter_notification] + manager_notifications)
+    all_notifications_sent = all([user_notification] + manager_notifications)
     logger.info(f"All notifications sent successfully: {all_notifications_sent}")
     
     return all_notifications_sent
@@ -352,24 +388,27 @@ def handle_shifts():
         if current_user.role != 'manager' and user_id != current_user.id:
             return jsonify({'message': 'Unauthorized'}), 403
        
-        date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+        try:
+            date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'message': 'Invalid date format. Use YYYY-MM-DD.'}), 400
        
         existing_shift = Shift.query.filter_by(user_id=user_id, date=date).first()
         if existing_shift and current_user.role != 'manager':
             return jsonify({'message': 'You already have a shift on this day'}), 400
        
-        new_shift = Shift(
-            user_id=user_id,
-            date=date,
-            start_time=datetime.strptime(data['start_time'], '%H:%M').time(),
-            end_time=datetime.strptime(data['end_time'], '%H:%M').time(),
-            shift_type=data['shift_type'],
-            status='requested'
-        )
-        db.session.add(new_shift)
-       
         try:
+            new_shift = Shift(
+                user_id=user_id,
+                date=date,
+                start_time=datetime.strptime(data['start_time'], '%H:%M').time(),
+                end_time=datetime.strptime(data['end_time'], '%H:%M').time(),
+                shift_type=data['shift_type'],
+                status='requested'
+            )
+            db.session.add(new_shift)
             db.session.commit()
+
             # Send notification for shift creation
             notification_sent = notify_shift_creation(new_shift)
             if notification_sent:
@@ -378,7 +417,7 @@ def handle_shifts():
                 return jsonify({'message': 'Shift created successfully but there was an issue sending notifications', 'id': new_shift.id}), 201
         except Exception as e:
             db.session.rollback()
-            logger.error(f"Error creating shift: {str(e)}")
+            logger.error(f"Error creating shift: {str(e)}", exc_info=True)
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
 
 
