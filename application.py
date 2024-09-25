@@ -321,7 +321,24 @@ def notify_shift_creation(shift):
 @application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
 def handle_shifts():
-    if request.method == 'POST':
+    if request.method == 'GET':
+        try:
+            shifts = Shift.query.options(joinedload(Shift.user)).all()
+            return jsonify([{
+                'id': shift.id,
+                'user_id': shift.user_id,
+                'user_name': shift.user.name,
+                'date': shift.date.isoformat(),
+                'start_time': shift.start_time.isoformat(),
+                'end_time': shift.end_time.isoformat(),
+                'status': shift.status,
+                'shift_type': shift.shift_type,
+            } for shift in shifts]), 200
+        except Exception as e:
+            logger.error(f"Error fetching shifts: {str(e)}", exc_info=True)
+            return jsonify({'message': 'An error occurred while fetching shifts', 'error': str(e)}), 500
+
+    elif request.method == 'POST':
         data = request.json
         user_id = data.get('user_id', current_user.id)
        
@@ -388,21 +405,27 @@ def manage_shift(shift_id):
                 else:
                     setattr(shift, field, data[field])
         
-        db.session.commit()
-        
-        # Send notification for shift update
-        notify_shift_change(shift, 'updated')
-        
-        return jsonify({'message': 'Shift updated successfully'}), 200
+        try:
+            db.session.commit()
+            # Send notification for shift update
+            notify_shift_change(shift, 'updated')
+            return jsonify({'message': 'Shift updated successfully'}), 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error updating shift: {str(e)}")
+            return jsonify({'message': 'Failed to update shift', 'error': str(e)}), 500
    
     elif request.method == 'DELETE':
-        # Send notification before deleting the shift
-        notify_shift_change(shift, 'deleted')
-        
-        db.session.delete(shift)
-        db.session.commit()
-        return jsonify({'message': 'Shift deleted successfully'}), 200
-    
+        try:
+            # Send notification before deleting the shift
+            notify_shift_change(shift, 'deleted')
+            db.session.delete(shift)
+            db.session.commit()
+            return jsonify({'message': 'Shift deleted successfully'}), 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error deleting shift: {str(e)}")
+            return jsonify({'message': 'Failed to delete shift', 'error': str(e)}), 500
 
 def init_db():
     with application.app_context():
