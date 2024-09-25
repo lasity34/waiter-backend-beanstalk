@@ -1,7 +1,9 @@
 import pytest
-from application import create_application, db, User, Shift, notify_shift_change, send_email_notification
+from application import create_application, db, User, Shift, notify_shift_change, send_email_notification, notify_shift_creation
 from test_config import TestConfig
 from datetime import datetime, time
+
+
 
 @pytest.fixture(scope='module')
 def app():
@@ -85,8 +87,12 @@ def test_logout(client, init_database):
 
 # shifts
 
-def test_create_shift_as_waiter(client, init_database):
+def test_create_shift_as_waiter(client, init_database, mocker):
     login_user(client, 'waiter@test.com', 'waiterpass')
+    
+    # Mock the send_email_notification function
+    mock_send_email = mocker.patch('application.send_email_notification')
+    
     response = client.post('/api/shifts', json={
         'date': '2023-06-01',
         'start_time': '09:00',
@@ -95,6 +101,9 @@ def test_create_shift_as_waiter(client, init_database):
     })
     assert response.status_code == 201
     assert b'Shift created successfully' in response.data
+    
+    # Check that send_email_notification was called at least twice
+    assert mock_send_email.call_count >= 2
 
 def test_create_shift_as_manager(client, init_database):
     login_user(client, 'admin@test.com', 'adminpass')
@@ -354,3 +363,80 @@ def test_create_user_with_notification(client, init_database, mocker):
     assert response.status_code == 201
     assert b'User created successfully' in response.data
     mock_send_email.assert_called_once()
+
+
+def test_create_shift_as_waiter_with_notification(client, init_database, mocker):
+    login_user(client, 'waiter@test.com', 'waiterpass')
+    
+    # Mock the send_email_notification function
+    mock_send_email = mocker.patch('application.send_email_notification')
+    
+    response = client.post('/api/shifts', json={
+        'date': '2023-06-01',
+        'start_time': '09:00',
+        'end_time': '17:00',
+        'shift_type': 'morning'
+    })
+    
+    assert response.status_code == 201
+    assert b'Shift created successfully' in response.data
+    
+    # Check that send_email_notification was called at least twice
+    # Once for the waiter and at least once for the manager(s)
+    assert mock_send_email.call_count >= 2
+
+
+
+def test_notify_shift_creation(app, init_database, mocker):
+    with app.app_context():
+        # Get the existing waiter from the database
+        waiter = User.query.filter_by(email='waiter@test.com').first()
+        assert waiter is not None, "Waiter not found in the database"
+
+        # Create a new shift for the waiter
+        shift = Shift(
+            user_id=waiter.id,
+            date=datetime(2023, 6, 1).date(),
+            start_time=datetime(2023, 6, 1, 9, 0).time(),
+            end_time=datetime(2023, 6, 1, 17, 0).time(),
+            shift_type='morning',
+            status='requested'
+        )
+        db.session.add(shift)
+        db.session.commit()
+
+        mock_send_email = mocker.patch('application.send_email_notification')
+        
+        # Call the notify_shift_creation function
+        notify_shift_creation(shift)
+        
+        # Check that send_email_notification was called at least twice
+        # Once for the waiter and at least once for the manager(s)
+        assert mock_send_email.call_count >= 2
+
+        # You can add more specific assertions here to check the content of the emails
+
+        # Clean up
+        db.session.delete(shift)
+        db.session.commit()
+
+
+def test_create_shift_as_manager_with_notification(client, init_database, mocker):
+    login_user(client, 'admin@test.com', 'adminpass')
+    
+    # Mock the send_email_notification function
+    mock_send_email = mocker.patch('application.send_email_notification')
+    
+    response = client.post('/api/shifts', json={
+        'user_id': 2,  # Assuming waiter's id is 2
+        'date': '2023-06-02',
+        'start_time': '17:00',
+        'end_time': '01:00',
+        'shift_type': 'evening'
+    })
+    assert response.status_code == 201
+    assert b'Shift created successfully' in response.data
+    
+    # Check that send_email_notification was called at least twice
+    # Once for the waiter and at least once for the manager(s)
+    assert mock_send_email.call_count >= 2

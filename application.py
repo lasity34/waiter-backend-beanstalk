@@ -288,6 +288,30 @@ def notify_shift_change(shift, action):
         send_email_notification(manager.email, subject, content)
 
 
+def notify_shift_creation(shift):
+    user = User.query.get(shift.user_id)
+    managers = User.query.filter_by(role='manager').all()
+    
+    subject = "New Shift Created"
+    content = f"""
+    <strong>Hello,</strong><br>
+    A new shift has been created with the following details:<br>
+    Waiter: {user.name}<br>
+    Date: {shift.date.strftime('%Y-%m-%d')}<br>
+    Time: {shift.start_time.strftime('%H:%M')} - {shift.end_time.strftime('%H:%M')}<br>
+    Type: {shift.shift_type}<br>
+    Status: {shift.status}
+    """
+    
+    # Notify the waiter
+    send_email_notification(user.email, subject, content)
+    
+    # Notify all managers
+    for manager in managers:
+        send_email_notification(manager.email, subject, content)
+
+
+
 @application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
 def handle_shifts():
@@ -310,35 +334,31 @@ def handle_shifts():
             start_time=datetime.strptime(data['start_time'], '%H:%M').time(),
             end_time=datetime.strptime(data['end_time'], '%H:%M').time(),
             shift_type=data['shift_type'],
-            status='approved' if current_user.role == 'manager' else 'requested'
+            status='requested'
         )
         db.session.add(new_shift)
        
         try:
             db.session.commit()
+            # Send notification for shift creation
+            notify_shift_creation(new_shift)
             return jsonify({'message': 'Shift created successfully', 'id': new_shift.id}), 201
         except Exception as e:
             db.session.rollback()
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
-   
-    else:  # GET request
-        try:
-            # Always fetch all shifts, regardless of user role
-            shifts = Shift.query.options(joinedload(Shift.user)).all()
-           
-            return jsonify([{
-                'id': shift.id,
-                'user_id': shift.user_id,
-                'user_name': shift.user.name,
-                'date': shift.date.isoformat(),
-                'start_time': shift.start_time.isoformat(),
-                'end_time': shift.end_time.isoformat(),
-                'status': shift.status,
-                'shift_type': shift.shift_type,
-                'is_current_user': shift.user_id == current_user.id
-            } for shift in shifts]), 200
-        except Exception as e:
-            return jsonify({'message': 'Failed to fetch shifts', 'error': str(e)}), 500
+    
+    elif request.method == 'GET':
+        shifts = Shift.query.options(joinedload(Shift.user)).all()
+        return jsonify([{
+            'id': shift.id,
+            'user_id': shift.user_id,
+            'user_name': shift.user.name,
+            'date': shift.date.isoformat(),
+            'start_time': shift.start_time.isoformat(),
+            'end_time': shift.end_time.isoformat(),
+            'status': shift.status,
+            'shift_type': shift.shift_type,
+        } for shift in shifts]), 200
 
 
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
