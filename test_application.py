@@ -20,38 +20,33 @@ def client(app):
 @pytest.fixture(scope='function')
 def init_database(app):
     with app.app_context():
-        try:
-            db.create_all()
-            
-            # Create and commit users first
-            admin = User(email='admin@test.com', role='manager', name='Admin')
-            admin.set_password('adminpass')
-            waiter = User(email='waiter@test.com', role='waiter', name='Waiter')
-            waiter.set_password('waiterpass')
-            db.session.add_all([admin, waiter])
-            db.session.commit()  # Commit to ensure users have IDs
+        db.drop_all()  # Drop all tables
+        db.create_all()  # Recreate all tables
+        
+        # Create and commit users
+        admin = User(email='admin@test.com', role='manager', name='Admin', password_set=True)
+        admin.set_password('adminpass')
+        waiter = User(email='waiter@test.com', role='waiter', name='Waiter', password_set=True)
+        waiter.set_password('waiterpass')
+        db.session.add_all([admin, waiter])
+        db.session.commit()
 
-            # Now create the shift
-            shift = Shift(
-                user_id=waiter.id,
-                date=datetime.now().date(),
-                start_time=time(9, 0),
-                end_time=time(17, 0),
-                status='requested',
-                shift_type='morning'
-            )
-            db.session.add(shift)
-            db.session.commit()
+        # Create shift
+        shift = Shift(
+            user_id=waiter.id,
+            date=datetime.now().date(),
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            status='requested',
+            shift_type='morning'
+        )
+        db.session.add(shift)
+        db.session.commit()
 
-            yield
+        yield
 
-        except Exception as e:
-            logging.error(f"Error setting up test database: {str(e)}")
-            raise
-
-        finally:
-            db.session.remove()
-            db.drop_all()
+        db.session.remove()
+        db.drop_all()
 
 def login_user(client, email, password):
     return client.post('/api/login', json={'email': email, 'password': password})
@@ -155,6 +150,14 @@ def test_change_password(client, init_database, mocker):
     assert b'Password changed successfully' in response.data
     mock_send_email.assert_called_once()
 
+    # Verify the user can now log in with the new password
+    logout_response = client.get('/api/logout')
+    assert logout_response.status_code == 200
+
+    login_response = login_user(client, 'waiter@test.com', 'newwaiterpass')
+    assert login_response.status_code == 200
+    assert b'Logged in successfully' in login_response.data
+
 def test_reset_password(client, init_database, mocker):
     login_user(client, 'admin@test.com', 'adminpass')
     mock_send_email = mocker.patch('application.send_email_notification')
@@ -164,6 +167,71 @@ def test_reset_password(client, init_database, mocker):
     assert response.status_code == 200
     assert b'Password reset successfully' in response.data
     mock_send_email.assert_called_once()
+
+def test_set_password(client, init_database, mocker):
+    # First, create a user without a password
+    user = User(email='nopassword@test.com', role='waiter', name='No Password User', password_set=False)
+    with client.application.app_context():
+        db.session.add(user)
+        db.session.commit()
+        token = user.get_reset_token()
+
+    response = client.post('/api/set_password', json={
+        'token': token,
+        'password': 'newpassword123'
+    })
+    assert response.status_code == 200
+    assert b'Password set successfully' in response.data
+
+    # Verify the user can now log in
+    login_response = login_user(client, 'nopassword@test.com', 'newpassword123')
+    assert login_response.status_code == 200
+    assert b'Logged in successfully' in login_response.data
+
+def test_set_password_invalid_token(client, init_database):
+    response = client.post('/api/set_password', json={
+        'token': 'invalid_token',
+        'password': 'newpassword123'
+    })
+    assert response.status_code == 400
+    assert b'Invalid or expired token' in response.data
+
+def test_reset_password_request(client, init_database, mocker):
+    mock_send_email = mocker.patch('application.send_email_notification')
+    response = client.post('/api/reset_password_request', json={
+        'email': 'waiter@test.com'
+    })
+    assert response.status_code == 200
+    assert b'If an account with that email exists, we have sent a password reset link' in response.data
+    mock_send_email.assert_called_once()
+
+def test_reset_password_request_nonexistent_email(client, init_database, mocker):
+    mock_send_email = mocker.patch('application.send_email_notification')
+    response = client.post('/api/reset_password_request', json={
+        'email': 'nonexistent@test.com'
+    })
+    assert response.status_code == 200  # We return 200 even for non-existent emails for security reasons
+    assert b'If an account with that email exists, we have sent a password reset link' in response.data
+    mock_send_email.assert_not_called()
+
+# Update the test_reset_password function
+def test_reset_password(client, init_database):
+    # First, get a valid token
+    with client.application.app_context():
+        user = User.query.filter_by(email='waiter@test.com').first()
+        token = user.get_reset_token()
+
+    response = client.post('/api/reset_password', json={
+        'token': token,
+        'password': 'newwaiterpass123'
+    })
+    assert response.status_code == 200
+    assert b'Password reset successfully' in response.data
+
+    # Verify the user can now log in with the new password
+    login_response = login_user(client, 'waiter@test.com', 'newwaiterpass123')
+    assert login_response.status_code == 200
+    assert b'Logged in successfully' in login_response.data
 
 # Shift management tests
 def test_create_shift_as_waiter(client, init_database, mocker):
@@ -292,8 +360,28 @@ def test_notify_shift_creation(app, init_database, mocker):
         )
         db.session.add(shift)
         db.session.commit()
+
+        # Mock the send_email_notification function
         mock_send_email = mocker.patch('application.send_email_notification')
-        notify_shift_creation(shift)
+        mock_send_email.return_value = 202  # Simulate successful email sending
+
+        # Call the function we're testing
+        result = notify_shift_creation(shift)
+
+        # Assert that the function returned True (all notifications sent successfully)
+        assert result is True
+
+        # Check that send_email_notification was called at least twice
         assert mock_send_email.call_count >= 2
+
         db.session.delete(shift)
         db.session.commit()
+
+        
+def test_reset_password_invalid_token(client, init_database):
+    response = client.post('/api/reset_password', json={
+        'token': 'invalid_token',
+        'password': 'newpassword123'
+    })
+    assert response.status_code == 400
+    assert b'Invalid or expired token' in response.data

@@ -1,17 +1,17 @@
 import os
 import logging
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS, cross_origin
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import joinedload
 from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from urllib.parse import quote
-from secrets import token_urlsafe
+from itsdangerous import URLSafeTimedSerializer
 
 # Load environment variables and configure logging
 load_dotenv()
@@ -46,12 +46,27 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(255))
     role = db.Column(db.String(20), nullable=False)
     name = db.Column(db.String(100), nullable=False)
+    password_set = db.Column(db.Boolean, default=False)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        self.password_set = True
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_reset_token(self, expires_sec=1800):
+        s = URLSafeTimedSerializer(application.config['SECRET_KEY'])
+        return s.dumps({'user_id': self.id}, salt='password-reset-salt')
+
+    @staticmethod
+    def verify_reset_token(token, expires_sec=1800):
+        s = URLSafeTimedSerializer(application.config['SECRET_KEY'])
+        try:
+            user_id = s.loads(token, salt='password-reset-salt', max_age=expires_sec)['user_id']
+        except:
+            return None
+        return User.query.get(user_id)
 
 class Shift(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -186,6 +201,9 @@ def login():
     if not user or not user.check_password(data['password']):
         return jsonify({'message': 'Invalid email or password'}), 401
 
+    if not user.password_set:
+        return jsonify({'message': 'Please set your password using the link sent to your email'}), 403
+
     login_user(user, remember=data.get('remember', False))
     return jsonify({
         'message': 'Logged in successfully',
@@ -207,31 +225,37 @@ def handle_users():
     if current_user.role != 'manager':
         return jsonify({'message': 'Unauthorized'}), 403
     
-    if request.method == 'POST':
+    if request.method == 'GET':
+        users = User.query.all()
+        return jsonify([{
+            'id': u.id, 
+            'name': u.name, 
+            'email': u.email, 
+            'role': u.role,
+            'password_set': u.password_set
+        } for u in users])
+    
+    elif request.method == 'POST':
         data = request.json
         if User.query.filter_by(email=data['email']).first():
             return jsonify({'message': 'Email already registered'}), 400
         
-        password = token_urlsafe(12)
-        new_user = User(email=data['email'], role=data['role'], name=data['name'])
-        new_user.set_password(password)
+        new_user = User(email=data['email'], role=data['role'], name=data['name'], password_set=False)
         db.session.add(new_user)
         db.session.commit()
+        
+        token = new_user.get_reset_token()
         
         subject = "Your New Account"
         content = f"""
         <strong>Hello {new_user.name},</strong><br>
-        Your account has been created with the following details:<br>
-        Email: {new_user.email}<br>
-        Temporary Password: {password}<br>
-        Please log in to your account and change your password as soon as possible.
+        Your account has been created. Please click the link below to set your password:<br>
+        <a href="{os.environ.get('FRONTEND_URL')}/set-password/{token}">Set Your Password</a><br>
+        This link will expire in 30 minutes.
         """
         send_email_notification(new_user.email, subject, content)
         
-        return jsonify({'message': 'User created successfully and password sent via email', 'id': new_user.id}), 201
-    else:
-        users = User.query.all()
-        return jsonify([{'id': u.id, 'name': u.name, 'email': u.email, 'role': u.role} for u in users])
+        return jsonify({'message': 'User created successfully and setup email sent', 'id': new_user.id}), 201
 
 @application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
 @login_required
@@ -246,8 +270,6 @@ def manage_user(user_id):
         user.name = data.get('name', user.name)
         user.email = data.get('email', user.email)
         user.role = data.get('role', user.role)
-        if 'password' in data:
-            user.set_password(data['password'])
         db.session.commit()
         return jsonify({'message': 'User updated successfully'})
     
@@ -258,6 +280,53 @@ def manage_user(user_id):
         db.session.delete(user)
         db.session.commit()
         return jsonify({'message': 'User deleted successfully'})
+
+@application.route('/api/users/<int:user_id>/reset_password', methods=['POST'])
+@login_required
+def admin_reset_user_password(user_id):
+    if current_user.role != 'manager':
+        return jsonify({'message': 'Unauthorized'}), 403
+    
+    user = User.query.get_or_404(user_id)
+    token = user.get_reset_token()
+    
+    subject = "Password Reset Request"
+    content = f"""
+    A password reset has been requested for your account. Please click the link below to reset your password:
+    <a href="{os.environ.get('FRONTEND_URL')}/reset-password/{token}">Reset Your Password</a><br>
+    This link will expire in 30 minutes.
+    If you did not request this, please contact your administrator.
+    """
+    send_email_notification(user.email, subject, content)
+    
+    return jsonify({'message': 'Password reset link sent to user'}), 200
+
+@application.route('/api/set_password', methods=['POST'])
+def set_password():
+    data = request.json
+    user = User.verify_reset_token(data['token'])
+    if user is None:
+        return jsonify({'message': 'Invalid or expired token'}), 400
+    
+    user.set_password(data['password'])
+    db.session.commit()
+    
+    return jsonify({'message': 'Password set successfully'}), 200
+
+@application.route('/api/reset_password_request', methods=['POST'])
+def reset_password_request():
+    data = request.json
+    user = User.query.filter_by(email=data['email']).first()
+    if user:
+        token = user.get_reset_token()
+        subject = "Password Reset Request"
+        content = f"""
+        To reset your password, visit the following link:
+        {os.environ.get('FRONTEND_URL')}/reset-password/{token}
+        If you did not make this request then simply ignore this email and no changes will be made.
+        """
+        send_email_notification(user.email, subject, content)
+    return jsonify({'message': 'If an account with that email exists, we have sent a password reset link'}), 200
 
 @application.route('/api/change_password', methods=['POST'])
 @login_required
@@ -281,30 +350,16 @@ def change_password():
     return jsonify({'message': 'Password changed successfully'}), 200
 
 @application.route('/api/reset_password', methods=['POST'])
-@login_required
 def reset_password():
-    if current_user.role != 'manager':
-        return jsonify({'message': 'Unauthorized'}), 403
-    
     data = request.json
-    user = User.query.filter_by(email=data['email']).first()
+    user = User.verify_reset_token(data['token'])
+    if user is None:
+        return jsonify({'message': 'Invalid or expired token'}), 400
     
-    if not user:
-        return jsonify({'message': 'User not found'}), 404
-    
-    new_password = token_urlsafe(12)
-    user.set_password(new_password)
+    user.set_password(data['password'])
     db.session.commit()
     
-    subject = "Password Reset"
-    content = f"""
-    <strong>Hello {user.name},</strong><br>
-    Your password has been reset. Your new temporary password is: {new_password}<br>
-    Please log in to your account and change your password as soon as possible.
-    """
-    send_email_notification(user.email, subject, content)
-    
-    return jsonify({'message': 'Password reset successfully and sent via email'}), 200
+    return jsonify({'message': 'Password reset successfully'}), 200
 
 # Shift management routes
 @application.route('/api/shifts', methods=['GET', 'POST'])
@@ -423,12 +478,12 @@ def init_db():
             admin_user = User(
                 email=os.getenv('ADMIN_EMAIL'),
                 role='manager',
-                name='Admin'
+                name='Admin',
+                password_set=True
             )
             admin_user.set_password(os.getenv('ADMIN_PASSWORD'))
             db.session.add(admin_user)
             db.session.commit()
-
 
 init_db()
 
@@ -447,6 +502,7 @@ def create_application(config_object=None):
     CORS(app)
     
     # Register all routes
+   # Register all routes
     app.add_url_rule('/', 'hello', hello)
     app.add_url_rule('/api/health', 'health_check', health_check)
     app.add_url_rule('/api/login', 'login', login, methods=['POST'])
@@ -457,6 +513,8 @@ def create_application(config_object=None):
     app.add_url_rule('/api/shifts/<int:shift_id>', 'manage_shift', manage_shift, methods=['PUT', 'DELETE'])
     app.add_url_rule('/api/change_password', 'change_password', change_password, methods=['POST'])
     app.add_url_rule('/api/reset_password', 'reset_password', reset_password, methods=['POST'])
+    app.add_url_rule('/api/reset_password_request', 'reset_password_request', reset_password_request, methods=['POST'])
+    app.add_url_rule('/api/set_password', 'set_password', set_password, methods=['POST'])
     app.add_url_rule('/api/test-cors', 'test_cors', test_cors, methods=['GET', 'OPTIONS'])
     
     return app
