@@ -14,6 +14,7 @@ from urllib.parse import quote
 from itsdangerous import URLSafeTimedSerializer
 from functools import wraps
 import secrets
+from datetime import datetime, timedelta
 
 # Load environment variables and configure logging
 load_dotenv()
@@ -50,6 +51,7 @@ class User(UserMixin, db.Model):
     name = db.Column(db.String(100), nullable=False)
     password_set = db.Column(db.Boolean, default=False)
     auth_token = db.Column(db.String(100), unique=True)
+    token_created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -200,9 +202,17 @@ def token_required(f):
             user = User.query.filter_by(auth_token=token).first()
             if not user:
                 return jsonify({'message': 'Invalid token'}), 401
-        except:
-            return jsonify({'message': 'Invalid token'}), 401
-        return f(user, *args, **kwargs)
+            
+            # Check if token is expired (assuming tokens expire after 1 hour)
+            token_age = datetime.now() - user.token_created_at
+            if token_age > timedelta(hours=1):
+                # Refresh token
+                new_token = user.generate_auth_token()
+                return jsonify({'message': 'Token expired', 'new_token': new_token}), 401
+            
+            return f(user, *args, **kwargs)
+        except Exception as e:
+            return jsonify({'message': 'Invalid token', 'error': str(e)}), 401
     return decorated
 
 # Routes
