@@ -195,10 +195,11 @@ def set_password_flag_for_existing_users():
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
             return jsonify({'message': 'Token is missing'}), 401
         try:
+            token = auth_header.split(" ")[1] if len(auth_header.split(" ")) > 1 else auth_header
             user = User.query.filter_by(auth_token=token).first()
             if not user:
                 return jsonify({'message': 'Invalid token'}), 401
