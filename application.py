@@ -172,6 +172,16 @@ def notify_shift_creation(shift):
     
     return all([user_notification] + manager_notifications)
 
+def set_password_flag_for_existing_users():
+    with application.app_context():
+        users = User.query.all()
+        for user in users:
+            if user.password_hash and not user.password_set:
+                user.password_set = True
+                print(f"Setting password_set flag for user: {user.email}")
+        db.session.commit()
+        print("Password flags updated for all users")
+
 # Routes
 @application.route('/')
 def hello():
@@ -198,11 +208,17 @@ def login():
         return jsonify({'message': 'Invalid login data'}), 400
 
     user = User.query.filter_by(email=data['email']).first()
+    
+    # Debug logging
+    print(f"Login attempt for email: {data['email']}")
+    if user:
+        print(f"User found. ID: {user.id}, Name: {user.name}, Role: {user.role}, Password set: {user.password_set}")
+    else:
+        print("User not found")
+
     if not user or not user.check_password(data['password']):
         return jsonify({'message': 'Invalid email or password'}), 401
 
-    if not user.password_set:
-        return jsonify({'message': 'Please set your password using the link sent to your email'}), 403
 
     login_user(user, remember=data.get('remember', False))
     return jsonify({
@@ -521,7 +537,7 @@ def create_application(config_object=None):
 
 if __name__ == '__main__':
     application = create_application()
-    
+    set_password_flag_for_existing_users()
     with application.app_context():
         db.create_all()
         
