@@ -12,6 +12,8 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from urllib.parse import quote
 from itsdangerous import URLSafeTimedSerializer
+from functools import wraps
+import secrets
 
 # Load environment variables and configure logging
 load_dotenv()
@@ -47,6 +49,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     password_set = db.Column(db.Boolean, default=False)
+    auth_token = db.Column(db.String(100), unique=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -58,6 +61,11 @@ class User(UserMixin, db.Model):
     def get_reset_token(self, expires_sec=1800):
         s = URLSafeTimedSerializer(application.config['SECRET_KEY'])
         return s.dumps({'user_id': self.id}, salt='password-reset-salt')
+    
+    def generate_auth_token(self):
+        self.auth_token = secrets.token_urlsafe(32)
+        db.session.commit()
+        return self.auth_token
 
     @staticmethod
     def verify_reset_token(token, expires_sec=1800):
@@ -182,6 +190,21 @@ def set_password_flag_for_existing_users():
         db.session.commit()
         print("Password flags updated for all users")
 
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'message': 'Token is missing'}), 401
+        try:
+            user = User.query.filter_by(auth_token=token).first()
+            if not user:
+                return jsonify({'message': 'Invalid token'}), 401
+        except:
+            return jsonify({'message': 'Invalid token'}), 401
+        return f(user, *args, **kwargs)
+    return decorated
+
 # Routes
 @application.route('/')
 def hello():
@@ -219,26 +242,29 @@ def login():
     if not user or not user.check_password(data['password']):
         return jsonify({'message': 'Invalid email or password'}), 401
 
-
     login_user(user, remember=data.get('remember', False))
+    auth_token = user.generate_auth_token()
     return jsonify({
         'message': 'Logged in successfully',
         'role': user.role,
         'name': user.name,
-        'id': user.id
+        'id': user.id,
+        'auth_token': auth_token
     }), 200
 
 @application.route('/api/logout')
 @login_required
-def logout():
+@token_required
+def logout(user):
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
 
 # User management routes
 @application.route('/api/users', methods=['GET', 'POST'])
 @login_required
-def handle_users():
-    if current_user.role != 'manager':
+@token_required
+def handle_users(user):
+    if user.role != 'manager':
         return jsonify({'message': 'Unauthorized'}), 403
     
     if request.method == 'GET':
@@ -275,8 +301,9 @@ def handle_users():
 
 @application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
 @login_required
-def manage_user(user_id):
-    if current_user.role != 'manager':
+@token_required
+def manage_user(user, user_id):
+    if user.role != 'manager':
         return jsonify({'message': 'Unauthorized'}), 403
     
     user = User.query.get_or_404(user_id)
@@ -299,7 +326,8 @@ def manage_user(user_id):
 
 @application.route('/api/users/<int:user_id>/reset_password', methods=['POST'])
 @login_required
-def admin_reset_user_password(user_id):
+@token_required
+def admin_reset_user_password(current_user, user_id):
     if current_user.role != 'manager':
         return jsonify({'message': 'Unauthorized'}), 403
     
@@ -346,9 +374,9 @@ def reset_password_request():
 
 @application.route('/api/change_password', methods=['POST'])
 @login_required
-def change_password():
+@token_required
+def change_password(user):
     data = request.json
-    user = current_user
     
     if not user.check_password(data['current_password']):
         return jsonify({'message': 'Current password is incorrect'}), 400
@@ -380,7 +408,8 @@ def reset_password():
 # Shift management routes
 @application.route('/api/shifts', methods=['GET', 'POST'])
 @login_required
-def handle_shifts():
+@token_required
+def handle_shifts(user):
     if request.method == 'GET':
         try:
             shifts = Shift.query.options(joinedload(Shift.user)).all()
@@ -438,8 +467,9 @@ def handle_shifts():
 
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
 @login_required
-def manage_shift(shift_id):
-    if current_user.role != 'manager':
+@token_required
+def manage_shift(user, shift_id):
+    if user.role != 'manager':
         return jsonify({'message': 'Unauthorized'}), 403
    
     shift = Shift.query.get_or_404(shift_id)
