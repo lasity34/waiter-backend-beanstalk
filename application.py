@@ -1,5 +1,6 @@
 import os
 import logging
+
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS, cross_origin
@@ -195,22 +196,16 @@ def set_password_flag_for_existing_users():
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
+        token = request.headers.get('Authorization')
+        if not token:
             return jsonify({'message': 'Token is missing'}), 401
         try:
-            token = auth_header.split(" ")[1] if len(auth_header.split(" ")) > 1 else auth_header
+            # Remove 'Bearer ' if present
+            if token.startswith('Bearer '):
+                token = token.split(' ')[1]
             user = User.query.filter_by(auth_token=token).first()
             if not user:
                 return jsonify({'message': 'Invalid token'}), 401
-            
-            # Check if token is expired (assuming tokens expire after 1 hour)
-            token_age = datetime.now() - user.token_created_at
-            if token_age > timedelta(hours=1):
-                # Refresh token
-                new_token = user.generate_auth_token()
-                return jsonify({'message': 'Token expired', 'new_token': new_token}), 401
-            
             return f(user, *args, **kwargs)
         except Exception as e:
             return jsonify({'message': 'Invalid token', 'error': str(e)}), 401
@@ -253,7 +248,6 @@ def login():
     if not user or not user.check_password(data['password']):
         return jsonify({'message': 'Invalid email or password'}), 401
 
-    login_user(user, remember=data.get('remember', False))
     auth_token = user.generate_auth_token()
     return jsonify({
         'message': 'Logged in successfully',
@@ -264,15 +258,16 @@ def login():
     }), 200
 
 @application.route('/api/logout')
-@login_required
 @token_required
 def logout(user):
-    logout_user()
-    return jsonify({'message': 'Logged out successfully'})
+    # In a token-based system, we don't need to do anything server-side
+    # The client should discard the token
+    return jsonify({'message': 'Logged out successfully'}), 200
+
 
 # User management routes
 @application.route('/api/users', methods=['GET', 'POST'])
-@login_required
+
 @token_required
 def handle_users(user):
     if user.role != 'manager':
@@ -311,7 +306,6 @@ def handle_users(user):
         return jsonify({'message': 'User created successfully and setup email sent', 'id': new_user.id}), 201
 
 @application.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
-@login_required
 @token_required
 def manage_user(user, user_id):
     if user.role != 'manager':
@@ -336,7 +330,6 @@ def manage_user(user, user_id):
         return jsonify({'message': 'User deleted successfully'})
 
 @application.route('/api/users/<int:user_id>/reset_password', methods=['POST'])
-@login_required
 @token_required
 def admin_reset_user_password(current_user, user_id):
     if current_user.role != 'manager':
@@ -384,7 +377,6 @@ def reset_password_request():
     return jsonify({'message': 'If an account with that email exists, we have sent a password reset link'}), 200
 
 @application.route('/api/change_password', methods=['POST'])
-@login_required
 @token_required
 def change_password(user):
     data = request.json
@@ -418,7 +410,6 @@ def reset_password():
 
 # Shift management routes
 @application.route('/api/shifts', methods=['GET', 'POST'])
-@login_required
 @token_required
 def handle_shifts(user):
     if request.method == 'GET':
@@ -440,9 +431,9 @@ def handle_shifts(user):
 
     elif request.method == 'POST':
         data = request.json
-        user_id = data.get('user_id', current_user.id)
+        user_id = data.get('user_id', user.id)
        
-        if current_user.role != 'manager' and user_id != current_user.id:
+        if user.role != 'manager' and user_id != user.id:
             return jsonify({'message': 'Unauthorized'}), 403
        
         try:
@@ -451,7 +442,7 @@ def handle_shifts(user):
             return jsonify({'message': 'Invalid date format. Use YYYY-MM-DD.'}), 400
        
         existing_shift = Shift.query.filter_by(user_id=user_id, date=date).first()
-        if existing_shift and current_user.role != 'manager':
+        if existing_shift and user.role != 'manager':
             return jsonify({'message': 'You already have a shift on this day'}), 400
        
         try:
@@ -475,9 +466,8 @@ def handle_shifts(user):
             db.session.rollback()
             logger.error(f"Error creating shift: {str(e)}", exc_info=True)
             return jsonify({'message': 'Failed to create shift', 'error': str(e)}), 500
-
+        
 @application.route('/api/shifts/<int:shift_id>', methods=['PUT', 'DELETE'])
-@login_required
 @token_required
 def manage_shift(user, shift_id):
     if user.role != 'manager':

@@ -56,7 +56,7 @@ def login_user(client, email, password):
 
 def add_auth_token(headers, token):
     if token:
-        headers['Authorization'] = token
+        headers['Authorization'] = f'Bearer {token}'
     return headers
 
 # Configuration tests
